@@ -28,7 +28,7 @@ from pathlib import Path
 
 NAME = "ontic-pages"
 # Bump it whenever SKILL.md changes (tests/test_skills.py pins the text's hash to it).
-REVISION = 3
+REVISION = 7
 MARKER = (
     f"<!-- managed by ontic-pages (skill revision {REVISION}): updated on every run; delete "
     "this line to keep your own edits, ONTIC_AGENT_SKILLS=0 to stop -->"

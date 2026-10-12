@@ -75,7 +75,7 @@ def test_redirects_and_404s(serve, store, site):
 def test_listing(serve, store, site):
     server = serve()
     assert b"No pages yet" in request(server, "/")[2]
-    publish(store, site, "report", "first <b>bold</b>", now=T1)
+    publish(store, site, "report", "first <b>bold</b>", now=T1, pillar="data", tags=["eval"])
     publish(store, site, "zeta", "another one", now=T2)
     status, headers, body = request(server, "/")
     assert status == 200 and headers["Content-Type"] == "text/html; charset=utf-8"
@@ -83,7 +83,21 @@ def test_listing(serve, store, site):
     text = body.decode()
     assert '<a href="/report/"><span title="report">report</span></a>' in text
     assert "first &lt;b&gt;bold&lt;/b&gt;" in text
-    assert "2026-10-07 15:30" in text and "another one" in text
+    assert "07.10.2026 17:30" in text and "another one" in text  # Berlin time
+    assert '<a class="pillar" href="/?pillar=data">Data</a>' in text
+    assert '<a class="tag" href="/?tag=eval">eval</a>' in text
+    assert '<a href="/" aria-current="page">All <span class="n">2</span></a>' in text
+    assert '<a href="/?pillar=data">Data <span class="n">1</span></a>' in text
+    # The filters: a pillar, a tag, both.
+    text = request(server, "/?pillar=data")[2].decode()
+    assert "/report/" in text and "/zeta/" not in text
+    assert '<a href="/?pillar=data" aria-current="page">Data' in text
+    text = request(server, "/?pillar=other")[2].decode()
+    assert "/report/" not in text and "/zeta/" in text
+    text = request(server, "/?tag=eval")[2].decode()
+    assert "/report/" in text and "/zeta/" not in text and "tag <b>eval</b>" in text
+    assert "No pages here." in request(server, "/?pillar=robot-learning")[2].decode()
+    assert "/zeta/" in request(server, "/?pillar=nonsense")[2].decode()  # ignored
     # Signed out, the listing is behind sign-in.
     status, headers, _ = request(server, "/", who=None)
     assert (status, headers["Location"]) == (
@@ -140,7 +154,8 @@ def test_files_are_kept_in_memory(serve, store, site, s3):
     publish(store, site, "report", now=T1)
     s3.calls.clear()
     assert content(server, "report", "/data.json")[2] == b'{"a": 1}'  # 8 bytes: kept
-    assert s3.calls == ["get_object"] * 4  # current, visibility, page.json, the file
+    # current, visibility, page.json, labels.json, the file
+    assert s3.calls == ["get_object"] * 5
     s3.calls.clear()
     for _ in range(3):
         assert content(server, "report", "/data.json")[2] == b'{"a": 1}'

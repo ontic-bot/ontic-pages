@@ -22,8 +22,8 @@ See README.md for what it does and deploy/README.md for how it is hosted.
   codes of the browser hand-off. In memory only.
 - `src/ontic_pages/remote.py`: the command line's side of the gateway: the token file, JSON
   calls, `login`, and uploading files to the presigned URLs.
-- `src/ontic_pages/info.py`: the facts behind `ontic-pages info`, the gateway's `/<name>/_info` page
-  and the short-name helper.
+- `src/ontic_pages/info.py`: the facts behind `ontic-pages info`, the gateway's `/<name>/_info` page,
+  the short-name helper, the pillar labels and `stamp` (every shown time is DD.MM.YYYY hh:mm, local).
 - `src/ontic_pages/gateway.py`: the HTTP server (stdlib `http.server`): routing on the apex and
   on page hosts (`<name>.<suffix>`), the API, file answers with ETags. Sign-in stays in
   oauth2-proxy.
@@ -36,6 +36,12 @@ See README.md for what it does and deploy/README.md for how it is hosted.
 - `src/ontic_pages/comments.py`: comments, one `<name>/comments.json` per page written only by the
   gateway (read-modify-write under a lock per page, cached a few seconds); cleaning of comment
   text and anchors; deleted comments stay as tombstones.
+- `src/ontic_pages/milestones.py`: the research overview's shared state, `_milestones.json` and
+  `_views.json` at the bucket root (gateway-only writers like comments): checks of milestone
+  fields and of a saved view's config. `milestones_cli.py`: `milestones` and `milestone add|update`.
+- `src/ontic_pages/markdown.py`: Markdown updates on markdown-it-py (no raw HTML, safe URL
+  schemes, image links to videos become players), math as MathML (latex2mathml, the output
+  checked to MathML elements only), and the standalone page around it.
 - `src/ontic_pages/comments_cli.py`: the `comments`, `comment` and `resolve` commands (always
   through the gateway; short thread ids; waits when rate limited).
 - `src/ontic_pages/shell.py` and `src/ontic_pages/static/`: the bar (shell HTML, bar.js,
@@ -58,6 +64,10 @@ See README.md for what it does and deploy/README.md for how it is hosted.
 - `src/ontic_pages/skills.py` and `src/ontic_pages/skills/ontic-pages/SKILL.md`: the agent skill
   (package data), synced into Claude Code and Codex on every command but `gateway` and `skill`.
   Edit the skill text there, never in an installed copy.
+- The overview at `/` (`shell.overview_html`, `static/overview.js` and `overview.css`): a
+  Notion-like database with two tables (reports, milestones), saved views per table, and the composer (Markdown with dropped media,
+  uploaded by the browser to presigned URLs; the gateway renders at commit, uploads.py). Text goes
+  in with textContent; the preview is the rendered page in a frame without scripts.
 - `src/ontic_pages/cli.py`: argparse commands.
 - `scripts/migrate_old_pages.py`: one-off copy of the old `ontic pages` jobs into this layout.
 - `tests/`: pytest, against `tests/fake_s3.py` (an in-memory fake of the few boto3 calls used;
@@ -72,9 +82,11 @@ See README.md for what it does and deploy/README.md for how it is hosted.
 - Never import the `ontic` package or depend on ontic-cli. This tool stands alone. The one
   exception is `scripts/migrate_old_pages.py`, a one-off bridge that reads the old system; run it
   with `uv run --with /path/to/cli scripts/migrate_old_pages.py`. Never import ontic in `src/`.
-- Standard library first. The only runtime dependency is boto3; ask before adding another.
+- Standard library first. Runtime dependencies: boto3, and for Markdown updates markdown-it-py
+  (with linkify), mdit-py-plugins and latex2mathml; ask before adding another.
 - Keep it small. Provenance is metadata in `page.json`, never checked.
-- The tool never deletes anything from the bucket.
+- The tool never deletes anything from the bucket. Deleting a page sets `deleted` in its
+  `labels.json`: hidden everywhere, 404 at its address, restorable.
 - File bytes never pass through the gateway (Caddy caps bodies at 64 KB on purpose): they go to
   presigned URLs. Only the gateway holds a bucket key in normal use.
 - Add or update a test for every behavior change; when you use a new boto3 call, add it to the fake.

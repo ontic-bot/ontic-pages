@@ -137,7 +137,8 @@ def page(store, site):
     """report: OWNER's page with PAGE as index.html, meta and a description."""
     (site / "index.html").write_text(PAGE, newline="")
     return publish(
-        store, site, "report", "first", {"model": "abc"}, published_by=OWNER, now=T1
+        store, site, "report", "first", {"model": "abc"}, published_by=OWNER, now=T1,
+        pillar="scene-reconstruction", tags=["splats"],
     )  # fmt: skip
 
 
@@ -153,6 +154,7 @@ def test_save_writes_a_new_version(store, s3, page):
     assert new["published_by"] == OWNER
     assert (new["description"], new["files"], new["git"]) == ("first", 6, page["git"])
     assert new["meta"] == {"model": "abc", "edited_from": old}
+    assert (new["pillar"], new["tags"]) == ("scene-reconstruction", ["splats"])
     # The edited file, patched; the others copied inside the bucket, with their types.
     data = s3.objects[("test-bucket", f"report/{new['version']}/index.html")]
     patched = PAGE.replace("<h1>Results", "<h1>Findings").encode()
@@ -296,12 +298,12 @@ def test_save_reads_only_current_when_cached(store, s3, page):
     edit = body(page, change("Results", "Findings"))
     new = save(store, "report", OWNER, edit, None, files, pages)
     # The new version id (a HEAD), the old version's file list (once), the files written at
-    # once, `current` asked again, then page.json and `current` written.
+    # once, `current` asked again, then page.json, labels.json and `current` written.
     assert sorted(s3.calls) == sorted(
         ["head_object", "list_objects_v2", "put_object"] + ["copy_object"] * 5
-        + ["get_object", "put_object", "put_object"]
+        + ["get_object", "put_object", "put_object", "put_object"]
     )  # fmt: skip
-    assert s3.calls[-3:] == ["get_object", "put_object", "put_object"]
+    assert s3.calls[-4:] == ["get_object", "put_object", "put_object", "put_object"]
     # The next save reads nothing but `current`: the new version is in the caches already.
     s3.calls.clear()
     edit = body(new, change("Findings", "Results"))

@@ -5,15 +5,54 @@ from __future__ import annotations
 
 import html
 import re
+from datetime import UTC, datetime
 from urllib.parse import quote
 
-from .store import Store
+from .store import DEFAULT_PILLAR, PILLARS, Store
 
 GITHUB_RE = re.compile(r"^(?:https://|ssh://git@|git@)github\.com[:/]([^/]+/[^/]+?)(?:\.git)?/?$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{7,64}$")
 NAME_CHARS, DESCRIPTION_CHARS = 32, 60
-DETAIL_FIELDS = ("published_at", "published_by", "description", "meta", "files")
+DETAIL_FIELDS = ("published_at", "published_by", "description", "pillar", "tags", "meta", "files")
 GIT_FIELDS = ("remote", "branch", "commit", "dirty")
+PILLAR_LABELS = {
+    "data": "Data",
+    "scene-reconstruction": "Scene reconstruction",
+    "world-models": "World models",
+    "robot-learning": "Robot learning",
+    "other": "Other",
+}
+
+
+def stamp(iso: str | None) -> str:
+    """An ISO time as DD.MM.YYYY hh:mm in this machine's time zone (the gateway runs in
+    Europe/Berlin); "" for none, the text itself when it is no time."""
+    try:
+        moment = datetime.fromisoformat(iso or "")
+    except ValueError:
+        return iso or ""
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=UTC)
+    return moment.astimezone().strftime("%d.%m.%Y %H:%M")
+
+
+def version_stamp(version: str) -> str:
+    """A version id (20261012T101500Z) as DD.MM.YYYY hh:mm."""
+    try:
+        moment = datetime.strptime(version, "%Y%m%dT%H%M%SZ").replace(tzinfo=UTC)
+    except ValueError:
+        return version
+    return moment.astimezone().strftime("%d.%m.%Y %H:%M")
+
+
+def pillar_of(page: dict) -> str:
+    """The page's pillar id; other for a page.json from before pillars."""
+    return page.get("pillar") if page.get("pillar") in PILLARS else DEFAULT_PILLAR
+
+
+def tags_of(page: dict) -> list[str]:
+    tags = page.get("tags")
+    return [t for t in tags if isinstance(t, str)] if isinstance(tags, list) else []
 
 
 def history(store: Store, name: str) -> tuple[str | None, list[dict]]:
@@ -44,6 +83,7 @@ def details(name: str, version: str, current: str, visibility: str, page: dict) 
     for key in DETAIL_FIELDS:
         if page.get(key) not in (None, "", {}, []):
             out[key] = page[key]
+    out["pillar"], out["tags"] = pillar_of(page), tags_of(page)
     git = page.get("git")
     if isinstance(git, dict) and git:
         out["git"] = {k: git[k] for k in GIT_FIELDS if git.get(k) not in (None, "")}
@@ -78,8 +118,10 @@ def info_text(name: str, current: str | None, metas: list[dict], visibility: str
         f"page         {name}",
         f"visibility   {visibility}",
         f"current      {current}",
-        f"published    {page.get('published_at', '')} by {page.get('published_by', '')}",
+        f"published    {stamp(page.get('published_at'))} by {page.get('published_by', '')}",
         f"description  {page.get('description', '')}",
+        f"pillar       {pillar_of(page)}",
+        f"tags         {', '.join(tags_of(page)) or 'none'}",
         f"git          {git_label(page.get('git'))}",
     ]
     lines += [f"meta         {k} = {v}" for k, v in page.get("meta", {}).items()]
@@ -87,7 +129,8 @@ def info_text(name: str, current: str | None, metas: list[dict], visibility: str
     for m in metas:
         mark = "*" if m.get("version") == current else " "
         by, desc = m.get("published_by", ""), m.get("description", "")
-        lines.append(f"  {mark} {m.get('version')}  {by}  {desc}")
+        when = stamp(m.get("published_at")) or version_stamp(m.get("version", ""))
+        lines.append(f"  {mark} {m.get('version')}  {when}  {by}  {desc}")
     return "\n".join(lines)
 
 
@@ -136,13 +179,16 @@ def info_html(name: str, current: str | None, metas: list[dict], visibility: str
         git_html = f"{remote}, branch {e(git.get('branch') or '')}, commit {sha}{dirty}"
     else:
         git_html = "none recorded"
-    published = f"{e(page.get('published_at', ''))} by {e(page.get('published_by', ''))}"
+    published = f"{e(stamp(page.get('published_at')))} by {e(page.get('published_by', ''))}"
+    tags = ", ".join(tags_of(page)) or "none"
     rows = []
     for m in metas:
         is_current = m.get("version") == current
         rows.append(
             f"<tr{' class=current' if is_current else ''}><td>{e(m.get('version', ''))}"
-            f"{' (current)' if is_current else ''}</td><td>{e(m.get('published_by', ''))}</td>"
+            f"{' (current)' if is_current else ''}</td>"
+            f"<td>{e(stamp(m.get('published_at')) or version_stamp(m.get('version', '')))}</td>"
+            f"<td>{e(m.get('published_by', ''))}</td>"
             f"<td>{short(m.get('description', ''), DESCRIPTION_CHARS)}</td></tr>"
         )
     return f"""<!doctype html>
@@ -157,6 +203,8 @@ def info_html(name: str, current: str | None, metas: list[dict], visibility: str
 <tr><th>Visibility</th><td>{e(visibility)}</td></tr>
 <tr><th>Published</th><td>{published}</td></tr>
 <tr><th>Version</th><td>{e(current or "")}</td></tr>
+<tr><th>Pillar</th><td>{e(PILLAR_LABELS[pillar_of(page)])}</td></tr>
+<tr><th>Tags</th><td>{e(tags)}</td></tr>
 <tr><th>Git</th><td>{git_html}</td></tr>
 </table>
 <h2>Metadata</h2>

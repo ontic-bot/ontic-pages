@@ -207,6 +207,11 @@ def test_api_facts(serve, store, two):
         "version": v1,
         "published_at": "2026-10-07T15:30:00+00:00",
         "description": "first </script><b>x</b>",
+        "pillar": "other",
+        "tags": [],
+        "title": "",
+        "milestone": "",
+        "format": "html",
         "published_by": OWNER,
     }
     assert json.loads(request(server, "/_api/pages/report")[2])["role"] == "viewer"

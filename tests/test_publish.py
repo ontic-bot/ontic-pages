@@ -36,7 +36,7 @@ def test_publish_folder(store, s3, site, tmp_path):
                 "style.css",
             )
         ]
-        + ["report/current"]
+        + ["report/current", "report/labels.json"]
     )
     assert store.current("report") == "20261007T153000Z"
     assert json.loads(s3.objects[("test-bucket", v + "page.json")][0]) == page
@@ -89,6 +89,10 @@ def test_cli_publish_list_set_current(cli_env, site, capsys):
             "model=abc",
             "--meta",
             "data=s3://x",
+            "--pillar",
+            "data",
+            "--tag",
+            "Labels",
         ]
     )
     out = capsys.readouterr().out
@@ -103,14 +107,23 @@ def test_cli_publish_list_set_current(cli_env, site, capsys):
     publish(store, site, "other", "another page", now=later)
 
     main(["list"])
-    out = capsys.readouterr().out
-    assert "report" in out and "20300101T000000Z" in out and "second" in out
-    assert "other" in out and "another page" in out
+    lines = capsys.readouterr().out.splitlines()
+    # The second version kept the pillar and tags; the new page is other. Berlin time.
+    assert lines[0].split() == ["other", "ontic", "other", "01.01.2030", "01:00", "another", "page"]
+    assert lines[1].split() == [
+        "report", "ontic", "data", "01.01.2030", "01:00", "second", "[labels]",
+    ]  # fmt: skip
+    main(["list", "--pillar", "data"])
+    assert capsys.readouterr().out.split()[0] == "report"
+    main(["list", "--tag", "labels"])
+    assert capsys.readouterr().out.split()[0] == "report"
+    main(["list", "--pillar", "world-models"])
+    assert capsys.readouterr().out.strip() == ""
 
     main(["list", "--name", "report"])
     lines = capsys.readouterr().out.splitlines()
     assert lines[0] == "visibility: ontic"
-    assert lines[1].startswith("* 20300101T000000Z")
+    assert lines[1].startswith("* 20300101T000000Z  01.01.2030 01:00")
     assert lines[2].startswith(f"  {first}") and "first" in lines[2]
 
     main(["set-current", "report", first])

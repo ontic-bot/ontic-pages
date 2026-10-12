@@ -12,7 +12,8 @@ replaced, html-escaped.
 The new version is the old one with that one file patched: every other file is copied inside the
 bucket (copy_object; the bytes never pass through the gateway) while the gateway writes the
 patched file (it is small), then page.json (published_by is the editor, the old description and
-meta plus edited_from=<old version>, the old git), then `current`, as publish.py does.
+meta plus edited_from=<old version>, the old git, pillar and tags), then `current`, as publish.py
+does.
 
 It is quick: what the gateway keeps of the old version (page.json, its file list, the HTML it
 served) is not read again, and what was written goes into those caches, so the answer and the
@@ -33,7 +34,15 @@ from html.parser import HTMLParser
 from urllib.parse import unquote
 
 from .cache import FileCache, PageCache
-from .publish import META_FILE, check_paths, finish, new_version, page_json, page_record
+from .publish import (
+    META_FILE,
+    check_paths,
+    finish,
+    kept_labels,
+    new_version,
+    page_json,
+    page_record,
+)
 from .store import VERSION_RE, Store
 from .uploads import Refused, Uploads
 
@@ -308,6 +317,8 @@ def save(
         old = files.meta(name, current)
         if who.strip().lower() != (old.get("published_by") or "").strip().lower():
             raise Refused(403, "only the owner can edit this page")
+        if old.get("format") == "markdown":
+            raise Refused(409, "a Markdown update is edited from the overview (Edit)")
         # Under way while the file is read and patched: the new version id, the file list, and
         # the versions for the answer.
         if uploads:
@@ -351,7 +362,8 @@ def save(
             page = page_record(
                 name, new, who, old.get("description", ""),
                 {**(old.get("meta") or {}), "edited_from": current}, old.get("git"),
-                len(others) + 1,
+                len(others) + 1, kept_labels(old), old.get("title") or "",
+                old.get("format") or "html",
             )  # fmt: skip
             # `current` may not have moved while the files were written (set-current, a publish).
             if store.current(name) != current:

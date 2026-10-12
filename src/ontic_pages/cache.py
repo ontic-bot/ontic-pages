@@ -1,9 +1,9 @@
 """What the gateway keeps in memory.
 
 A version never changes once written, so its files are kept (least recently used out first) by
-(name, version, path), and so is the list of its files. Only `current`, `visibility` and the list
-of versions can change; they are kept for a few seconds. A saved edit (edits.py) puts what it
-wrote straight in, so the new version costs no read.
+(name, version, path), and so is the list of its files. Only `current`, `visibility`, the list
+of versions and labels.json can change; they are kept for a few seconds. A saved edit (edits.py)
+puts what it wrote straight in, so the new version costs no read.
 """
 
 from __future__ import annotations
@@ -220,3 +220,32 @@ class PageCache:
             self.generations[name] = self.generations.get(name, 0) + 1
             self.entries.pop(name, None)
             self.lists.pop(name, None)
+
+
+class LabelCache:
+    """Each page's labels.json (Store.labels), kept for `ttl` seconds; a change the gateway
+    makes is put straight in."""
+
+    def __init__(self, store: Store, ttl: float):
+        self.store, self.ttl = store, ttl
+        self.lock = threading.Lock()
+        self.entries: dict[str, tuple[float, dict]] = {}
+
+    def get(self, name: str) -> dict:
+        now = time.monotonic()
+        with self.lock:
+            hit = self.entries.get(name)
+        if hit and now - hit[0] < self.ttl:
+            return hit[1]
+        labels = self.store.labels(name)
+        with self.lock:
+            self.entries[name] = (now, labels)
+        return labels
+
+    def put(self, name: str, labels: dict) -> None:
+        with self.lock:
+            self.entries[name] = (time.monotonic(), labels)
+
+    def forget(self, name: str) -> None:
+        with self.lock:
+            self.entries.pop(name, None)

@@ -9,6 +9,14 @@ new version; nothing is ever deleted. The owner can also fix text right on the
 page in the browser (no Edit button: it is always on for them); Save writes that as a new
 version too.
 
+`https://pages.onticlabs.io/` is the research overview, laid out like a Notion database: two
+tables, Reports (every page you may open) and Milestones (what the team works toward and what it
+learned), each with views the team saves and shares (filter, sort, group, properties shown,
+layout: table, board or list). Reports are the pages: each belongs to one research pillar (`data`,
+`scene-reconstruction`, `world-models`, `robot-learning`, or `other`), may carry tags, and may
+point at the milestone it is evidence for; without one it is exploratory. People write Markdown
+updates right there, with images and videos dragged in.
+
 The only "provenance" is metadata: who published, when, an optional
 description, any `--meta key=value` you pass (for example `model=sha256:...`), and
 the git remote, branch, commit and dirty flag of the
@@ -54,19 +62,69 @@ When the token expires, any command says `run ontic-pages login`.
 ```sh
 # Publish a folder (it should have an index.html) or one .html file (served as index.html).
 ontic-pages publish ./report --name depth-eval --description "Depth eval, Oct 7" \
-    --meta model=sha256:9f1c... --meta dataset=point-clouds-arctic --visibility ontic
+    --meta model=sha256:9f1c... --meta dataset=point-clouds-arctic --visibility ontic \
+    --pillar scene-reconstruction --tag depth --tag eval
 # uploading 12/12 files, 3.4/3.4 MB
 # published depth-eval version 20261007T153000Z (12 files)
 # https://pages.onticlabs.io/depth-eval/
 
-ontic-pages list                     # the pages you may open, their visibility and current version
+ontic-pages list                     # the pages you may open: visibility, pillar, date, tags
+ontic-pages list --pillar data --tag eval   # only the pages of that pillar with that tag
 ontic-pages list --name depth-eval   # its versions, newest first, * marks the current one
 ontic-pages info depth-eval          # everything page.json says, plus the versions
 ontic-pages set-current depth-eval 20261007T153000Z   # serve an older (or newer) version
 ontic-pages share depth-eval public  # private, ontic or public
 ontic-pages url depth-eval           # its URL
+ontic-pages label depth-eval --pillar data --tag eval   # change labels, no new version
+ontic-pages delete depth-eval        # hide it everywhere (files kept); restore brings it back
 ontic-pages pull depth-eval ./current   # download the current version (--version for another)
 ```
+
+### The research overview
+
+A milestone is a capability to demonstrate or a question to resolve, with an owner, the
+criteria that say when it is done, an optional next step and target date. It closes as
+achieved, answered (a useful negative finding counts: mark it negative) or dropped, always with
+a result: what was learned. Anyone on the team adds and changes them, in the overview or here:
+
+```sh
+ontic-pages milestones                 # the open ones (--all for closed too, --json)
+ontic-pages milestone add "Predict 1 s of particle dynamics from RGB" --pillar world-models \
+    --criteria "rollouts under 5 mm for 1 s on held-out scenes" --next "train on merged data"
+ontic-pages milestone update predict-1-s-of-particle-dynamics-from-rg --status achieved \
+    --result "4.2 mm at 1 s" --evidence dynamics-week-43
+```
+
+A report points at a milestone with `publish --milestone <id>` (the milestone's pillar comes
+along; `--no-milestone` makes it exploratory again). Its title is its HTML `<title>` unless
+`--title` says otherwise, so an agent-written report needs no more than that. The owner can
+relink a report from the overview (the link icon on its row): that saves a new version with the
+same files.
+
+Markdown: `publish notes.md` renders it into the page (CommonMark: headings, lists, tables,
+code, links, task lists, footnotes; math as `$...$` and `$$...$$`, drawn as MathML without
+script; an image link to a video becomes a player) and uploads the images and videos it links
+next to it; the source is kept as `update.md`. In the overview, New update does the same in the
+browser: drop or paste images and videos into the text, Preview, Publish. Files go straight
+from the browser to the bucket through presigned URLs, which needs the bucket's CORS rule
+(deploy/README.md). Edit (on your own update's row) publishes a new version; the earlier images
+stay. Raw HTML in Markdown is shown as text, never run.
+
+Views: each table has built-in ones (reports: all, exploratory, a board by pillar; milestones:
+open, learned, a board by status), and `+` adds one. The toolbar changes the view: Filter (by
+any select property: pillar, milestone or exploratory, author, tags, status, ...), Sort, Group,
+Properties (the columns shown) and the layout. A changed view shows Reset and Save for everyone
+(or Save as view, for a built-in one). Anyone may change a saved view; only its creator deletes
+it. New adds a Markdown update (Reports) or a milestone (Milestones); a milestone row opens it.
+
+The table is editable, as in Notion: click a Pillar, Milestone or Tags cell to change it (type a
+new tag to create it), Rename from a row's menu; on a board, drag a card to another lane. Anyone
+on the team may; it changes the page's `labels.json`, not its files, so no new version is made,
+and the next publish starts from these labels. Milestone cells (status, kind, pillar, owner,
+target, next step) are edited the same way; closing one asks for its result. Groups fold (the
+chevron), remembered in your browser. The owner deletes a page from its row's menu (Undo right
+after, or Deleted below the table): it disappears everywhere and its address answers 404, but
+nothing is removed from the bucket.
 
 ### Comments
 
@@ -252,6 +310,10 @@ even for public pages.
     <name>/current                 the current version id
     <name>/visibility              private, ontic or public (absent means ontic)
     <name>/comments.json           the comment threads, written by the gateway only
+    <name>/labels.json             pillar, tags, milestone, title as changed since the last
+                                   publish (over page.json), and deleted
+    _milestones.json               the milestones, written by the gateway only
+    _views.json                    the saved views of the overview, written by the gateway only
     <name>/<version>/page.json     the metadata
     <name>/<version>/...           the files
 
@@ -272,10 +334,19 @@ old copies. A deleted comment keeps its place with an empty body.
 | `version` | the version id, a UTC timestamp like `20261007T153000Z` |
 | `published_at` | the same time in ISO 8601 |
 | `published_by` | the signed-in email (with `--direct`: `ONTIC_PAGES_EMAIL`, else git `user.email`, else `$USER`) |
+| `title` | from `--title`, else the HTML `<title>` or the Markdown's first heading; may be empty |
 | `description` | from `--description`, may be empty |
-| `meta` | map of strings from `--meta key=value`; a version saved from text edited in the bar adds `edited_from` (the version it was edited from) |
+| `pillar` | from `--pillar`: `data`, `scene-reconstruction`, `world-models`, `robot-learning` or `other`; a publish without it keeps the current version's (a new page: `other`) |
+| `tags` | sorted lowercase tags from `--tag` (repeatable, at most 20); a publish without any keeps the current version's, `--no-tags` clears them |
+| `milestone` | the id of the milestone it is evidence for, from `--milestone`, or empty (exploratory); a publish without it keeps the current version's |
+| `format` | `html`, or `markdown` for an update written in Markdown (then `update.md` is its source) |
+| `meta` | map of strings from `--meta key=value`; a version saved from text edited in the bar, or relinked in the overview, adds `edited_from` (the version it was edited from) |
 | `git` | `{remote, branch, commit, dirty}` of the directory you published from, or null outside a git repo |
 | `files` | how many files the version has |
+
+Times are shown as DD.MM.YYYY hh:mm in local time: the viewer's in the bar, the machine's on the
+command line, Europe/Berlin on the pages the gateway writes itself (the plain list, `_info`).
+page.json and version ids stay in UTC.
 
 `page.json` is also served as `/<name>/page.json`, and the gateway answers
 `/<name>/_info`, so a top-level `page.json` or `_info` in your folder is refused.

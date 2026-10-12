@@ -22,7 +22,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from .config import command_name, token_path
-from .publish import collect, git_provenance
+from .publish import collect, git_provenance, html_title, read_markdown
 
 POLL_SECONDS = 2.0
 LOGIN_SECONDS = 300
@@ -198,21 +198,43 @@ def publish(
     meta: dict[str, str] | None = None,
     visibility: str | None = None,
     cwd: Path | None = None,
+    pillar: str | None = None,
+    tags: list[str] | None = None,
+    milestone: str | None = None,
+    title: str = "",
 ) -> dict:
     """Publish through the gateway. Returns its commit answer: {page (page.json), visibility,
-    url}."""
-    files = collect(source)
+    url}. A pillar, tags or milestone left as None keep the current version's. A .md file goes
+    as Markdown (the gateway renders it) with the files it points at."""
+    markdown = None
+    if source.suffix.lower() == ".md" and source.is_file():
+        markdown, files = read_markdown(source)
+        title = title or ""
+    else:
+        files = collect(source)
+        title = title or html_title(files.get("index.html", Path()))
     sizes = {rel: path.stat().st_size for rel, path in files.items()}
     start = {
         "description": description,
         "meta": dict(meta or {}),
         "git": git_provenance(cwd or Path.cwd()),
         "visibility": visibility,
+        "pillar": pillar,
+        "tags": tags,
+        "milestone": milestone,
+        "title": title,
     }
     extra = len(json.dumps(start))
     if extra > META_BYTES:
         raise SystemExit("the description and --meta are too long")
-    first, *rest = batches(sizes, extra)
+    if markdown is not None:
+        # The Markdown fills the first request; the files it points at follow.
+        start["markdown"] = markdown
+        if len(json.dumps(start)) > BATCH_BYTES:
+            raise SystemExit(f"{source}: too long to publish in one request; split it")
+        first, rest = [], [b for b in batches(sizes, 0) if b]
+    else:
+        first, *rest = batches(sizes, extra)
     answer = api.post(page_path(name, "versions"), {**start, "files": first})
     version, uploads = answer["version"], answer["uploads"]
     for batch in rest:

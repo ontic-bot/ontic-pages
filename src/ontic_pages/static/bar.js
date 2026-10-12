@@ -45,7 +45,8 @@
     open: function (panelId) { openPop(panelId); },
     copy: function (button, text) { copy(button, text); },
     relative: function (iso) { return relative(iso); },
-    when: function (iso) { return when(iso); }
+    when: function (iso) { return when(iso); },
+    pillar: function (id) { return pillarLabel(id); }
   };
   function isNumber(y) { return typeof y === "number" && isFinite(y) && y >= 0 && y < 1e9; }
 
@@ -202,7 +203,25 @@
     n = Math.round(n);
     return n + " " + unit + (n === 1 ? "" : "s") + " ago";
   }
-  function when(iso) { return iso ? iso.slice(0, 16).replace("T", " ") + " UTC" : ""; }
+  // DD.MM.YYYY hh:mm in the viewer's time zone.
+  function when(iso) {
+    var t = new Date(iso);
+    if (!iso || isNaN(t.getTime())) return iso || "";
+    function two(n) { return (n < 10 ? "0" : "") + n; }
+    return two(t.getDate()) + "." + two(t.getMonth() + 1) + "." + t.getFullYear() + " " +
+      two(t.getHours()) + ":" + two(t.getMinutes());
+  }
+  // The research pillars of the mission repo, as info.PILLAR_LABELS names them.
+  var PILLARS = {
+    "data": "Data",
+    "scene-reconstruction": "Scene reconstruction",
+    "world-models": "World models",
+    "robot-learning": "Robot learning",
+    "other": "Other"
+  };
+  function pillarLabel(id) {
+    return Object.prototype.hasOwnProperty.call(PILLARS, id) ? PILLARS[id] : "";
+  }
   function el(tag, cls, text) {
     var node = document.createElement(tag);
     if (cls) node.className = cls;
@@ -221,6 +240,21 @@
     time.title = when(shown.published_at);
     $("m-desc").textContent = shown.description || "";
     $("m-desc").hidden = !shown.description;
+    var labels = $("m-labels");
+    if (labels) {
+      var words = [pillarLabel(shown.pillar)].concat(shown.tags || []).filter(Boolean);
+      labels.textContent = words.join(" \u00b7 ");
+      labels.hidden = !words.length;
+    }
+    // The milestone this version is evidence for (named for the team only), in the overview.
+    var goal = $("m-milestone"), known = (page.milestones || {})[shown.milestone];
+    if (goal) {
+      goal.hidden = !known;
+      if (known) {
+        $("m-milestone-link").textContent = known.title;
+        $("m-milestone-link").href = "/#m-" + encodeURIComponent(shown.milestone);
+      }
+    }
 
     var list = $("m-versions");
     list.textContent = "";
