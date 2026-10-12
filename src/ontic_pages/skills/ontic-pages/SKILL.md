@@ -60,41 +60,42 @@ Either way, these differ from a claude.ai artifact:
 2. Pick a name: lowercase letters, digits, `.` and `-`, starting with a letter or digit, short
    (it is the URL and a host name, so no `_`). Publishing again under the same name adds a
    version and makes it current; only the page's owner (its publisher) may do that.
-3. Find the milestone the report is evidence for. Milestones are what the team works toward: a
-   capability to demonstrate or a question to resolve. List the open ones:
+3. File it. Every page goes into the team's research overview (a table of all reports by
+   pillar, milestone and tag), so every publish of a new page carries all of these; do not
+   skip them:
+
+   - **Milestone.** Milestones are what the team works toward: a capability to demonstrate or
+     a question to resolve. Read the open ones with `ontic pages milestones --json`. If the
+     report is evidence for one, pass `--milestone <id>` (its pillar comes along). If none
+     clearly fits, leave it out: the report is exploratory, which is fine. Never create a
+     milestone just to file a report.
+   - **Pillar.** Without a milestone, always pass `--pillar`: `data`, `scene-reconstruction`,
+     `world-models`, `robot-learning`, or `other` for anything else. In an experiments repo
+     folder `projects/<pillar>/...` it is that pillar.
+   - **Tags.** Always 1 to 3 `--tag`: what the report is about (the method, dataset, robot or
+     metric), lowercase with `-` (letters, digits, `.`, `_`, `-`). Reuse the team's tags first:
+     `ontic pages list` shows them; write `eval`, not a new `evaluation`.
+   - **Title.** Give the HTML a meaningful `<title>` (in Markdown, the first `# heading`): it is
+     the report's name in the overview.
+4. Publish, from the repo the page came from (git remote, branch and commit are recorded):
 
    ```bash
-   ontic pages milestones            # id, title, pillar, owner, done-when, next step
-   ontic pages milestones --json     # the same, for you to read
+   ontic pages publish ./report --name depth-eval --milestone predict-particle-dynamics --tag depth --tag ablation --description "Depth ablation, same budget"
+   ontic pages publish ./report --name splat-scale --pillar scene-reconstruction --tag splats --tag probe
+   ontic pages publish notes.md --name week-41-dynamics --milestone predict-particle-dynamics --tag rollout   # Markdown (math as $x^2$), rendered, with the images and videos it links
+   ontic pages publish ./report --name depth-eval --pillar data --tag eval --meta model=sha256:9f1c... --meta dataset=point-clouds-arctic
    ```
 
-   If the report clearly serves one, pass `--milestone <id>`: its pillar comes along, so
-   `--pillar` is then not needed. If none fits, leave it out: the report is exploratory, which
-   is fine and stays visible. Never create a milestone just to file a report.
-4. Publish, from the repo the page came from (git remote, branch and commit are recorded). Give
-   the HTML a meaningful `<title>`: it becomes the report's title in the overview.
-
-   ```bash
-   ontic pages publish ./report --name depth-eval --milestone predict-particle-dynamics --description "Depth ablation, same budget"
-   ontic pages publish ./report --name depth-eval --description "Depth eval, Oct 7" --pillar scene-reconstruction --tag depth --tag eval
-   ontic pages publish notes.md --name week-41-dynamics --milestone predict-particle-dynamics   # Markdown, rendered, with the images and videos it links
-   ontic pages publish report.html --name depth-eval            # single file
-   ontic pages publish ./report --name depth-eval --meta model=sha256:9f1c... --meta dataset=point-clouds-arctic
-   ```
-
-   `--pillar` files the page under one research pillar of the mission repo: `data`,
-   `scene-reconstruction`, `world-models`, `robot-learning`, or `other` for anything else. Always
-   pass it on a new page (it is `other` without it); in an experiments repo folder
-   `projects/<pillar>/...` it is that pillar. `--tag` (repeatable; lowercase letters, digits,
-   `.`, `_`, `-`) adds short free-form tags. Publishing again without them keeps the page's
-   pillar, tags and milestone; `--tag` replaces the tags, `--no-tags` clears them,
-   `--no-milestone` makes it exploratory again.
+   Publishing again without them keeps the page's pillar, tags and milestone; `--tag` replaces
+   the tags, `--no-tags` clears them, `--no-milestone` makes it exploratory again. When a new
+   version changes what the report is about, update them too.
 
    `--meta key=value` (repeatable) records what the page was made from. It is metadata only.
    If the results come from an experiment tracked by the ontic CLI, always record its job id
    (`--meta job=<job-id>`, as `ontic launch` or `ontic status` print it), plus the job ids or
    registry names of the checkpoints and datasets it shows, so others can trace the page back.
-5. Give the user the printed link.
+5. Give the user the printed link, and say where you filed it (milestone or exploratory, pillar,
+   tags), so a wrong guess is quick to fix.
 
 To change a published page's pillar, tags, milestone or title without publishing again (no new
 version): `ontic pages label <name> --pillar data --tag eval --milestone <id>`. The team edits
