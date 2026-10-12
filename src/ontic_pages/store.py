@@ -4,6 +4,8 @@ at the bucket root):
     <prefix><name>/current                   the current version id, as text
     <prefix><name>/visibility                private, ontic or public (absent means ontic)
     <prefix><name>/comments.json             the comments, written by the gateway (comments.py)
+    <prefix><name>/labels.json               pillar, tags, milestone, title as changed in the
+                                             overview, and deleted (hidden; nothing is removed)
     <prefix><name>/<version>/page.json       metadata of that version
     <prefix><name>/<version>/<files...>      the page itself
 
@@ -29,6 +31,11 @@ HOST_NAME_RE = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*
 VERSION_RE = re.compile(r"^\d{8}T\d{6}Z$")
 VISIBILITIES = ("private", "ontic", "public")
 DEFAULT_VISIBILITY = "ontic"
+# The research pillars of the mission repo (pillars.yaml), and other for the rest.
+PILLARS = ("data", "scene-reconstruction", "world-models", "robot-learning", "other")
+DEFAULT_PILLAR = "other"
+TAG_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,39}$")
+MAX_TAGS = 20
 # Path segments the gateway uses for itself, so no page may take them as its name.
 RESERVED_NAMES = {"public", "oauth2", "_info", "_health", "page.json"}
 
@@ -70,6 +77,28 @@ def check_visibility(level: str) -> str:
     if level not in VISIBILITIES:
         raise ValueError(f"visibility must be one of {', '.join(VISIBILITIES)}, got {level!r}")
     return level
+
+
+def check_pillar(pillar: str) -> str:
+    if pillar not in PILLARS:
+        raise ValueError(f"pillar must be one of {', '.join(PILLARS)}, got {pillar!r}")
+    return pillar
+
+
+def check_tags(tags) -> list[str]:
+    """Tags as kept in page.json: lowercase, no repeats, sorted."""
+    if not isinstance(tags, (list, tuple)) or not all(isinstance(t, str) for t in tags):
+        raise ValueError("tags: a list of text")
+    tags = sorted({t.strip().lower() for t in tags})
+    for tag in tags:
+        if not TAG_RE.match(tag):
+            raise ValueError(
+                f"bad tag {tag!r}: use lowercase letters, digits, '.', '_' or '-' "
+                "(up to 40 characters, starting with a letter or digit)"
+            )
+    if len(tags) > MAX_TAGS:
+        raise ValueError(f"at most {MAX_TAGS} tags")
+    return tags
 
 
 def make_client(cfg: Config):
@@ -203,6 +232,19 @@ class Store:
 
     def set_visibility(self, name: str, level: str) -> None:
         self.put(self.key(name, "visibility"), check_visibility(level).encode())
+
+    def labels(self, name: str) -> dict:
+        """The page's labels.json ({} when absent or unreadable): what the overview changed
+        since the last publish, over the current version's page.json."""
+        text = self.read_text(self.key(name, "labels.json"))
+        try:
+            data = json.loads(text) if text else {}
+        except ValueError:
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def set_labels(self, name: str, labels: dict) -> None:
+        self.put(self.key(name, "labels.json"), json.dumps(labels, indent=1).encode())
 
     def meta(self, name: str, version: str) -> dict:
         text = self.read_text(self.key(name, version, "page.json"))

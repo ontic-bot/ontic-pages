@@ -149,6 +149,15 @@
 
     if (d.visibility) row("Visibility").textContent = ACCESS[d.visibility] || text(d.visibility);
 
+    var pillar = bar.pillar(text(d.pillar));
+    if (pillar) row("Pillar").textContent = pillar;
+    var tags = Array.isArray(d.tags) ? d.tags.map(text).filter(Boolean) : [];
+    if (tags.length) {
+      dd = row("Tags");
+      dd.className = "d-tags";
+      tags.forEach(function (tag) { dd.appendChild(el("span", "tag", tag)); });
+    }
+
     if (d.git && typeof d.git === "object") {
       var git = d.git;
       dd = row("Git");

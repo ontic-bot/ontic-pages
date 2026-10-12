@@ -1,4 +1,5 @@
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,17 @@ def no_agent_skill(monkeypatch):
     """Commands run in tests never touch the real ~/.claude or ~/.codex (test_skills.py
     turns the sync back on against a temporary home)."""
     monkeypatch.setenv("ONTIC_AGENT_SKILLS", "0")
+
+
+@pytest.fixture(autouse=True)
+def berlin_time(monkeypatch):
+    """Dates are shown in local time (the gateway runs in Europe/Berlin): the same zone in every
+    test, also for node."""
+    monkeypatch.setenv("TZ", "Europe/Berlin")
+    time.tzset()
+    yield
+    monkeypatch.undo()
+    time.tzset()
 
 
 @pytest.fixture

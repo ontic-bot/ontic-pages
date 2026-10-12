@@ -29,6 +29,7 @@ import json
 import re
 from importlib.resources import files
 
+from .info import PILLAR_LABELS, stamp
 from .store import content_type
 
 ACCESS = {
@@ -38,7 +39,7 @@ ACCESS = {
 }
 SANDBOX = "allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox"
 SANDBOX += " allow-downloads"
-BAR_RE = re.compile(r"^/_bar/(bar|login|comments)\.([0-9a-f]{1,64})\.(js|css)$")
+BAR_RE = re.compile(r"^/_bar/(bar|login|comments|overview)\.([0-9a-f]{1,64})\.(js|css)$")
 # The bridge is served as one script: bridge.js, then the comment pins (pins.js).
 BRIDGE_RE = re.compile(r"^/_bridge\.([0-9a-f]{1,64})\.js$")
 
@@ -67,6 +68,8 @@ BUNDLES = {
     "comments.css": ("comments.css",),
     "bridge.js": ("bridge.js", "pins.js", "edit-bridge.js"),
     "login.js": ("login.js",),
+    "overview.js": ("overview.js",),
+    "overview.css": ("overview.css",),
 }
 
 
@@ -147,10 +150,6 @@ def json_for_html(value) -> str:
     return text.replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
 
 
-def when(iso: str) -> str:
-    return iso[:16].replace("T", " ") + " UTC" if iso else ""
-
-
 def versions_html(page: dict, viewing: str | None) -> str:
     e, name = html.escape, page["name"]
     items = []
@@ -162,7 +161,7 @@ def versions_html(page: dict, viewing: str | None) -> str:
         tag = '<span class="tag">current</span>' if current else ""
         items.append(
             f'<li><a role="menuitem" href="{e(href)}"{here}><span class="when">'
-            f"{e(when(v.get('published_at', '')) or version)}</span>{tag}"
+            f"{e(stamp(v.get('published_at', '')) or version)}</span>{tag}"
             f'<span class="desc">{e(v.get("description", ""))}</span></a></li>'
         )
     return "".join(items)
@@ -231,6 +230,9 @@ def shell_html(page: dict, view: dict, assets: Assets) -> str:
     )
     explain = ACCESS[page["visibility"]][1].format(domain=page["email_domain"])
     old = viewing is not None and viewing != page["current"]
+    labels = " \u00b7 ".join(
+        filter(None, [PILLAR_LABELS.get(shown.get("pillar", "")), *shown.get("tags", [])])
+    )
     return f"""<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8">
@@ -251,8 +253,10 @@ def shell_html(page: dict, view: dict, assets: Assets) -> str:
 <div id="m-main">
 <div class="facts">
 <p id="m-by"{"" if by else " hidden"}>Page by <span id="m-owner">{e(by)}</span></p>
-<p class="muted" id="m-updated">Updated <time id="m-time" datetime="{e(shown.get("published_at", ""))}">{e(when(shown.get("published_at", "")))}</time></p>
+<p class="muted" id="m-updated">Updated <time id="m-time" datetime="{e(shown.get("published_at", ""))}">{e(stamp(shown.get("published_at", "")))}</time></p>
 <p id="m-desc"{"" if shown.get("description") else " hidden"}>{e(shown.get("description", ""))}</p>
+<p class="muted" id="m-labels"{"" if labels else " hidden"}>{e(labels)}</p>
+<p id="m-milestone" hidden>Milestone: <a id="m-milestone-link" href="/"></a></p>
 </div>
 <p class="label">Versions</p>
 <ol class="versions" id="m-versions">{versions_html(page, viewing)}</ol>
@@ -288,6 +292,38 @@ def shell_html(page: dict, view: dict, assets: Assets) -> str:
 </main>
 </body></html>
 """  # noqa: E501
+
+
+def overview_csp(upload_origin: str, content_origins: str) -> str:
+    """The overview's policy: its own script, and uploads (PUT) straight to the bucket. Media
+    dropped into the composer are previewed from blob: URLs, an edited update's own from the
+    pages' hosts."""
+    upload = f" {upload_origin}" if upload_origin else ""
+    return (
+        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+        f"img-src 'self' data: blob: {content_origins}; media-src 'self' blob: {content_origins}; "
+        f"connect-src 'self'{upload}; "
+        "frame-ancestors 'none'; base-uri 'none'; form-action 'none'; object-src 'none'"
+    )
+
+
+def overview_html(email: str, assets: Assets, fallback: str) -> str:
+    """The research overview at the apex: milestones, findings and the reports table, drawn by
+    static/overview.js from /_api/overview. `fallback`: the plain list, without script."""
+    e = html.escape
+    return f"""<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Ontic research</title>
+<link rel="stylesheet" href="{assets.url("overview.css")}">
+<script src="{assets.url("overview.js")}" defer></script>
+</head>
+<body data-viewer="{e(email)}">
+<div id="app"><noscript>{fallback}</noscript></div>
+</body></html>
+"""
 
 
 def login_html(email: str, code: str, problem: str, assets: Assets) -> str:

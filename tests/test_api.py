@@ -277,6 +277,24 @@ def test_publish_refuses_bad_files(local, store, files):
     assert store.versions("fresh") == []
 
 
+@pytest.mark.parametrize(
+    "labels",
+    [
+        {"pillar": "infra"},
+        {"pillar": 3},
+        {"tags": "eval"},
+        {"tags": ["has space"]},
+        {"tags": [1]},
+        {"tags": [f"t{i}" for i in range(21)]},
+    ],
+)
+def test_publish_refuses_bad_pillar_or_tags(local, store, labels):
+    srv = local()
+    body = {"files": files_of(("index.html", 1)), **labels}
+    status, answer = call(srv, "/_api/pages/fresh/versions", OWNER, body)
+    assert status == 400, answer
+
+
 def test_publish_limits_and_batches(local, store, monkeypatch):
     srv = local()
     too_many = files_of(*((f"{i}", 0) for i in range(MAX_FILES + 1)))

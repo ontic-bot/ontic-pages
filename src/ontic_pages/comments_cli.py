@@ -13,6 +13,7 @@ import time
 
 from . import remote
 from .config import load_config
+from .info import stamp
 from .store import check_name
 
 SHORT = 6
@@ -73,10 +74,6 @@ def write(client: remote.Api, path: str, body: dict, out=None) -> dict:
     return answer
 
 
-def when(iso: str) -> str:
-    return iso[:16].replace("T", " ") + " UTC" if iso else ""
-
-
 def thread_text(thread: dict, short: str, current: str | None) -> str:
     anchor = thread.get("anchor") or {}
     state = "resolved" if thread.get("resolved") else "open"
@@ -89,11 +86,11 @@ def thread_text(thread: dict, short: str, current: str | None) -> str:
         where += f"  (made on version {thread['version']})"
     lines = [f"{short}  {state}  {where}"]
     for c in thread.get("comments", []):
-        lines.append(f"  {c.get('author', '')}, {when(c.get('created_at', ''))}:")
+        lines.append(f"  {c.get('author', '')}, {stamp(c.get('created_at', ''))}:")
         body = "(deleted)" if c.get("deleted") else c.get("body", "")
         lines += [f"    {line}" for line in body.splitlines() or [""]]
     if thread.get("resolved"):
-        lines.append(f"  resolved by {thread.get('resolved_by')}, {when(thread['resolved_at'])}")
+        lines.append(f"  resolved by {thread.get('resolved_by')}, {stamp(thread['resolved_at'])}")
     return "\n".join(lines)
 
 

@@ -10,13 +10,21 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import comments_cli, gateway, pull, remote, skills
+from . import comments_cli, gateway, milestones_cli, pull, remote, skills
 from .auth import DEFAULT_AUTH_URL
 from .cache import MB
 from .config import Config, command_name, load_config, token_path
-from .info import history, info_text
+from .info import history, info_text, pillar_of, stamp, tags_of, version_stamp
 from .publish import publish
-from .store import VERSION_RE, VISIBILITIES, Store, check_name, make_client
+from .store import (
+    PILLARS,
+    VERSION_RE,
+    VISIBILITIES,
+    Store,
+    check_name,
+    check_tags,
+    make_client,
+)
 
 LEVELS = "private (only you), ontic (signed-in team, the default), public (anyone with the link)"
 
@@ -29,6 +37,18 @@ def parse_meta(items: list[str]) -> dict[str, str]:
             raise SystemExit(f"--meta wants key=value, got {item!r}")
         meta[key] = value
     return meta
+
+
+def given_milestone(args) -> str | None:
+    """--milestone or --no-milestone; None keeps the current version's."""
+    return "" if args.no_milestone else args.milestone
+
+
+def given_tags(args) -> list[str] | None:
+    """--tag (repeatable) or --no-tags; None keeps the current version's tags."""
+    if args.no_tags:
+        return []
+    return check_tags(args.tag) if args.tag else None
 
 
 def open_store(args) -> tuple[Store, Config]:
@@ -61,14 +81,17 @@ def private_note(store: Store, name: str) -> None:
 
 def cmd_publish(args) -> None:
     source = Path(args.source)
+    milestone = given_milestone(args)
     if source.is_dir() and not (source / "index.html").exists():
         print(f"warning: {source} has no index.html; the page URL will answer 404", file=sys.stderr)
+    tags = given_tags(args)
     if not direct(args):
         api, cfg = open_api()
         check_name(args.name)
         done = remote.publish(
-            api, source, args.name, args.description, parse_meta(args.meta), args.visibility
-        )
+            api, source, args.name, args.description, parse_meta(args.meta), args.visibility,
+            pillar=args.pillar, tags=tags, milestone=milestone, title=args.title,
+        )  # fmt: skip
         page = done["page"]
         print(f"published {page['name']} version {page['version']} ({page['files']} files)")
         if done.get("visibility") == "private":
@@ -78,7 +101,8 @@ def cmd_publish(args) -> None:
     store, cfg = open_store(args)
     page = publish(
         store, source, args.name, args.description, parse_meta(args.meta),
-        visibility=args.visibility, published_by=cfg.email,
+        visibility=args.visibility, published_by=cfg.email, pillar=args.pillar, tags=tags,
+        milestone=milestone, title=args.title,
     )  # fmt: skip
     print(f"published {page['name']} version {page['version']} ({page['files']} files)")
     if store.visibility(args.name) == "private":
@@ -106,6 +130,28 @@ def cmd_share(args) -> None:
     print(url_for(store, cfg, args.name))
 
 
+def version_line(version: str, current: str | None, meta: dict) -> str:
+    mark = "*" if version == current else " "
+    when = stamp(meta.get("published_at")) or version_stamp(version)
+    by, desc = meta.get("published_by", ""), meta.get("description", "")
+    return f"{mark} {version}  {when}  {by}  {desc}"
+
+
+def page_lines(pages: list[dict], args) -> list[str]:
+    """One line per page (name, visibility, pillar, published, description, tags), only those
+    of --pillar and with every --tag."""
+    want = check_tags(args.tag)
+    lines = []
+    for p in pages:
+        pillar, tags = pillar_of(p), tags_of(p)
+        if (args.pillar and pillar != args.pillar) or not set(want) <= set(tags):
+            continue
+        when = stamp(p.get("published_at")) or version_stamp(p.get("current", ""))
+        line = f"{p['name']:32} {p['visibility']:8} {pillar:20} {when}  {p.get('description', '')}"
+        lines.append(line + ("  [" + ", ".join(tags) + "]" if tags else ""))
+    return lines
+
+
 def cmd_list(args) -> None:
     if not direct(args):
         return list_remote(args)
@@ -118,16 +164,16 @@ def cmd_list(args) -> None:
             raise SystemExit(f"no page named {args.name}")
         print(f"visibility: {store.visibility(args.name)}")
         for version in reversed(versions):
-            meta = store.meta(args.name, version)
-            mark = "*" if version == current else " "
-            by, desc = meta.get("published_by", ""), meta.get("description", "")
-            print(f"{mark} {version}  {by}  {desc}")
+            print(version_line(version, current, store.meta(args.name, version)))
         return
+    pages = []
     for name in store.names():
         current = store.current(name)
-        if current:
-            desc = store.meta(name, current).get("description", "")
-            print(f"{name:32} {store.visibility(name):8} {current}  {desc}")
+        if current and not store.labels(name).get("deleted"):
+            meta = store.meta(name, current)
+            pages.append({**meta, "name": name, "current": current,
+                          "visibility": store.visibility(name)})  # fmt: skip
+    print("\n".join(page_lines(pages, args)))
 
 
 def list_remote(args) -> None:
@@ -137,11 +183,9 @@ def list_remote(args) -> None:
         page = api.get(remote.page_path(args.name))
         print(f"visibility: {page['visibility']}")
         for v in page["versions"]:
-            mark = "*" if v["version"] == page["current"] else " "
-            print(f"{mark} {v['version']}  {v.get('published_by', '')}  {v['description']}")
+            print(version_line(v["version"], page["current"], v))
         return
-    for p in api.get("/_api/pages")["pages"]:
-        print(f"{p['name']:32} {p['visibility']:8} {p['current']}  {p['description']}")
+    print("\n".join(page_lines(api.get("/_api/pages")["pages"], args)))
 
 
 def cmd_set_current(args) -> None:
@@ -195,6 +239,44 @@ def cmd_pull(args) -> None:
         raise SystemExit(f"{args.name} has no version {args.version or '(no page)'}")
     count = pull.pull_direct(store, args.name, version, dest)
     pull.report(args.name, store.meta(args.name, version), count, dest)
+
+
+def cmd_delete(args, deleted: bool = True) -> None:
+    check_name(args.name)
+    if not direct(args):
+        api, _ = open_api()
+        api.post(remote.page_path(args.name, "delete"), {"deleted": deleted})
+    else:
+        store, _ = open_store(args)
+        if not store.current(args.name):
+            raise SystemExit(f"no page named {args.name}")
+        labels = {**store.labels(args.name), "deleted": deleted}
+        if not deleted:
+            labels.pop("deleted")
+        store.set_labels(args.name, labels)
+    if deleted:
+        print(f"deleted {args.name}: hidden everywhere, its files kept "
+              f"(bring it back with: {command_name()} restore {args.name})")  # fmt: skip
+    else:
+        print(f"restored {args.name}")
+
+
+def cmd_restore(args) -> None:
+    cmd_delete(args, deleted=False)
+
+
+def cmd_label(args) -> None:
+    """Change a page's pillar, tags, milestone or title, as in the overview (no new version)."""
+    check_name(args.name)
+    body = {"pillar": args.pillar, "tags": given_tags(args), "milestone": given_milestone(args),
+            "title": args.title or None}  # fmt: skip
+    body = {k: v for k, v in body.items() if v is not None}
+    if not body:
+        raise SystemExit("nothing to change: give --pillar, --tag, --milestone or --title")
+    api, _ = open_api()
+    row = api.post(remote.page_path(args.name, "labels"), body)["report"]
+    tags = ", ".join(row["tags"]) or "none"
+    print(f"{args.name}: {row['pillar']}, milestone {row['milestone'] or 'none'}, tags {tags}")
 
 
 def cmd_url(args) -> None:
@@ -281,8 +363,15 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser(
         "publish", parents=[key], help="upload a folder or .html file as a new version"
     )
-    s.add_argument("source", help="a folder (with index.html) or a single .html file")
+    s.add_argument(
+        "source",
+        help="a folder (with index.html), a single .html file, or a .md file (rendered, with "
+        "the images and videos it points at)",
+    )
     s.add_argument("--name", required=True, help="page name, part of the URL")
+    s.add_argument(
+        "--title", default="", help="default: the page's <title>, or the Markdown's first heading"
+    )
     s.add_argument("--description", default="", help="one line shown in listings")
     s.add_argument(
         "--meta",
@@ -291,6 +380,26 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="KEY=VALUE",
         help="any metadata, repeatable (for example model=<hash>)",
     )
+    s.add_argument(
+        "--pillar",
+        choices=PILLARS,
+        help="the research pillar it belongs to; without it a new page is other and an "
+        "existing page keeps its pillar",
+    )
+    s.add_argument(
+        "--tag",
+        action="append",
+        default=[],
+        help="a tag, repeatable (lowercase letters, digits, '.', '_', '-'); without any an "
+        "existing page keeps its tags",
+    )
+    s.add_argument("--no-tags", action="store_true", help="publish this version without tags")
+    s.add_argument(
+        "--milestone",
+        help="the milestone it is evidence for (an id from `milestones`); its pillar comes "
+        "along; without it an existing page keeps its milestone",
+    )
+    s.add_argument("--no-milestone", action="store_true", help="exploratory: no milestone")
     s.add_argument(
         "--visibility",
         choices=VISIBILITIES,
@@ -308,6 +417,10 @@ def build_parser() -> argparse.ArgumentParser:
         "list", parents=[key], help="list pages with their visibility, or the versions of one"
     )
     s.add_argument("--name", help="show the versions of this page")
+    s.add_argument("--pillar", choices=PILLARS, help="only pages of this pillar")
+    s.add_argument(
+        "--tag", action="append", default=[], help="only pages with this tag (repeatable)"
+    )
     s.set_defaults(func=cmd_list)
 
     s = sub.add_parser(
@@ -331,11 +444,33 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--version", help="a version id from `list --name` (default the current one)")
     s.set_defaults(func=cmd_pull)
 
+    s = sub.add_parser(
+        "delete", parents=[key], help="delete a page you own: hidden everywhere, files kept"
+    )
+    s.add_argument("name")
+    s.set_defaults(func=cmd_delete)
+    s = sub.add_parser("restore", parents=[key], help="bring back a deleted page")
+    s.add_argument("name")
+    s.set_defaults(func=cmd_restore)
+
+    s = sub.add_parser(
+        "label", help="change a page's pillar, tags, milestone or title (no new version)"
+    )
+    s.add_argument("name")
+    s.add_argument("--pillar", choices=PILLARS)
+    s.add_argument("--tag", action="append", default=[], help="the tags, repeatable (replaces)")
+    s.add_argument("--no-tags", action="store_true")
+    s.add_argument("--milestone", help="a milestone id (see: milestones)")
+    s.add_argument("--no-milestone", action="store_true", help="exploratory")
+    s.add_argument("--title")
+    s.set_defaults(func=cmd_label)
+
     s = sub.add_parser("url", help="print a page's URL")
     s.add_argument("name")
     s.set_defaults(func=cmd_url)
 
     comments_cli.add_commands(sub)
+    milestones_cli.add_commands(sub)
 
     s = sub.add_parser(
         "skill", help="show where the agent skill is installed for Claude Code and Codex"

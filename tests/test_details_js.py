@@ -11,7 +11,8 @@ SHA = "0123456789abcdef0123456789abcdef01234567"
 FULL = {
     "name": "report", "version": OLD, "current": CURRENT, "visibility": "ontic",
     "published_at": "2026-10-07T15:30:00+00:00", "published_by": "owner@onticlabs.io",
-    "description": "Depth <b>eval</b>", "files": 12,
+    "description": "Depth <b>eval</b>", "files": 12, "pillar": "world-models",
+    "tags": ["depth", "<b>x</b>"],
     "meta": {"edited_from": "20261006T120000Z", "seed": "7", "run": "https://wandb.ai/x/y",
              "cmd": "javascript:alert(1)"},
     "git": {"remote": "git@github.com:onticlabs/experiments.git", "branch": "main",
@@ -23,15 +24,16 @@ PANEL = r"""
 const PAGE = { name: "report", content_origin: CONTENT, current: CURRENT, role: "viewer",
   visibility: "ontic", published_by: "owner@onticlabs.io", email_domain: "onticlabs.io",
   versions: [{ version: CURRENT, published_at: "", description: "" },
-             { version: OLD, published_at: "", description: "" }] };
+             { version: OLD, published_at: "", description: "", pillar: "data",
+               tags: ["eval", "<i>x</i>"] }] };
 const facts = { page: PAGE, view: { path: "/", version: VIEWING } };
 const frame = E("iframe", { id: "frame" });
 frame.contentWindow = { postMessage() {} };
 const access = E("select", { id: "s-access" });
 access.options = [];
 access.selectedIndex = 0;
-const ids = ["m-by", "m-owner", "m-time", "m-desc", "m-versions", "old", "s-note", "s-explain",
-  "s-owner", "share-btn", "share-panel", "m-raw", "slow", "retry"];
+const ids = ["m-by", "m-owner", "m-time", "m-desc", "m-labels", "m-versions", "old", "s-note",
+  "s-explain", "s-owner", "share-btn", "share-panel", "m-raw", "slow", "retry"];
 let focused = null;
 El.prototype.focus = function () { focused = this.id; };
 const titleBtn = E("button", { id: "title-btn" });
@@ -89,6 +91,7 @@ const first = VIA === "menu" ? details : infoBtn, second = VIA === "menu" ? info
   const out = {};
   titleBtn.click();
   out.menu = [state(), fetches.length];  // nothing asked before the panel opens
+  out.labels = [byId("m-labels").textContent, byId("m-labels").hidden];
   first.click();
   out.loading = [state(), dbody.childNodes.map(show).join(""), fetches.slice()];
   for (let i = 0; i < 5; i++) await tick();
@@ -127,6 +130,7 @@ def test_panel_for_an_old_version():
     shown = {"menu": False, "panel": True, "expanded": "true", "focused": "d-title"}
     closed = {"menu": False, "panel": False, "expanded": "false", "focused": "info-btn"}
     assert out["menu"] == [menu, 0]
+    assert out["labels"] == ["Data \u00b7 eval \u00b7 <i>x</i>", False]  # the viewed version's
     state, text, fetches = out["loading"]
     assert state == shown  # the info button closes the menu and focus moves into the panel
     assert text == "\np: Loading…"
@@ -137,11 +141,15 @@ def test_panel_for_an_old_version():
         "dt: Published",
         "dd: ",
         "div: by owner@onticlabs.io",
-        "div: 2026-10-07 15:30 UTC (2 days ago)",
+        "div: 07.10.2026 17:30 (2 days ago)",  # the viewer's time zone (Berlin here)
         "dt: Version",
         f"dd: {OLD}{{copy}}",  # an old version: no "current" tag
         "dt: Visibility",
         "dd: Team",
+        "dt: Pillar",
+        "dd: World models",
+        "dt: Tags",
+        "dd: depth<b>x</b>",  # text, never HTML
         "dt: Git",
         "dd: ",
         "div: [git@github.com:onticlabs/experiments.git]"

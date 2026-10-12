@@ -7,6 +7,10 @@
             page.json (published_by is the signed-in email), the visibility and `current`,
             exactly as publish.py does
 
+A Markdown update (`markdown` in the start request, from the overview's composer or a .md file
+on the command line) lists only its media as files; at commit the gateway renders the Markdown
+and writes index.html and update.md itself.
+
 Started versions are kept in memory only (at most MAX_PENDING, for PENDING_SECONDS). A version
 that is never committed leaves its files in the bucket, unseen; nothing is deleted.
 """
@@ -17,8 +21,22 @@ import threading
 import time
 from dataclasses import dataclass, field
 
-from .publish import check_paths, finish, new_version, page_record
-from .store import Store, check_visibility
+from .info import stamp
+from .publish import (
+    MARKDOWN_FILE,
+    MAX_MARKDOWN,
+    META_FILE,
+    MILESTONE_RE,
+    check_paths,
+    clean_title,
+    finish,
+    labels,
+    markdown_files,
+    new_version,
+    page_record,
+    version_iso,
+)
+from .store import Store, check_pillar, check_tags, check_visibility
 
 MAX_FILES = 5000
 MAX_BYTES = 5 * 1024**3
@@ -46,11 +64,19 @@ class Pending:
     git: dict | None
     visibility: str | None
     started: float
+    pillar: str | None = None  # None: keep the current version's (labels())
+    tags: list[str] | None = None
+    milestone: str | None = None
+    title: str = ""
+    markdown: str | None = None
+    keep: bool = False  # a Markdown edit: the current version's other files come along
     files: dict[str, int] = field(default_factory=dict)
 
 
-def file_list(value) -> dict[str, int]:
-    """[{path, size}] -> {path: size}, checked."""
+def file_list(value, markdown: bool = False) -> dict[str, int]:
+    """[{path, size}] -> {path: size}, checked. A Markdown update may have no files."""
+    if markdown and value in (None, []):
+        return {}
     if not isinstance(value, list) or not value:
         raise Refused(400, "files: a non-empty list of {path, size}")
     files: dict[str, int] = {}
@@ -62,10 +88,38 @@ def file_list(value) -> dict[str, int]:
             raise Refused(400, f"files: {path!r} twice")
         files[path] = size
     try:
-        check_paths(files)
+        check_paths(files, markdown=markdown)
     except ValueError as err:
         raise Refused(400, str(err)) from None
     return files
+
+
+def page_labels(body: dict) -> tuple[str | None, list[str] | None, str | None]:
+    """pillar, tags and milestone from a start request, checked; None (or absent) keeps the
+    current ones, "" is no milestone."""
+    pillar, tags, milestone = body.get("pillar"), body.get("tags"), body.get("milestone")
+    if milestone is not None and not (
+        isinstance(milestone, str) and (milestone == "" or MILESTONE_RE.match(milestone))
+    ):
+        raise Refused(400, "milestone: a milestone id, or empty for none")
+    try:
+        return (
+            None if pillar is None else check_pillar(pillar),
+            None if tags is None else check_tags(tags),
+            milestone,
+        )
+    except ValueError as err:
+        raise Refused(400, str(err)) from None
+
+
+def page_text(body: dict) -> tuple[str, str | None]:
+    """title and markdown from a start request, checked."""
+    title, markdown = body.get("title") or "", body.get("markdown")
+    if not isinstance(title, str):
+        raise Refused(400, "title: text")
+    if markdown is not None and (not isinstance(markdown, str) or len(markdown) > MAX_MARKDOWN):
+        raise Refused(400, f"markdown: text, at most {MAX_MARKDOWN // 1024} KB")
+    return clean_title(title), markdown
 
 
 def metadata(body: dict) -> tuple[str, dict, dict | None, str | None]:
@@ -94,6 +148,7 @@ def metadata(body: dict) -> tuple[str, dict, dict | None, str | None]:
 class Uploads:
     def __init__(self, store: Store, seconds: float = PENDING_SECONDS, cap: int = MAX_PENDING):
         self.store, self.seconds, self.cap = store, seconds, cap
+        self.find = None  # milestone id -> milestone or None (the gateway's Milestones.find)
         self.lock = threading.Lock()
         self.pending: dict[tuple[str, str], Pending] = {}
         self.reserved: set[tuple[str, str]] = set()  # versions an edit is writing (edits.py)
@@ -106,14 +161,24 @@ class Uploads:
         """A new pending version with the first files, and their upload URLs. The caller has
         checked the name and that `who` may publish it."""
         description, meta, git, visibility = metadata(body)
-        files = file_list(body.get("files"))
+        pillar, tags, milestone = page_labels(body)
+        title, markdown = page_text(body)
+        if milestone and self.find and self.find(milestone) is None:
+            raise Refused(400, f"no milestone {milestone!r} (see: milestones)")
+        files = file_list(body.get("files"), markdown is not None)
+        keep = body.get("keep", False)
+        if not isinstance(keep, bool) or (keep and markdown is None):
+            raise Refused(400, "keep: true only with markdown (an edit of an update)")
         now = time.monotonic()
         with self.lock:
             self._prune(now)
             if len(self.pending) >= self.cap:
                 raise Refused(503, "too many publishes under way, try again in a few minutes")
             version = new_version(self.store, name, taken=self._taken(name))
-            up = Pending(name, version, who, description, meta, git, visibility, now)
+            up = Pending(
+                name, version, who, description, meta, git, visibility, now, pillar, tags,
+                milestone, title, markdown, keep,
+            )  # fmt: skip
             self.pending[(name, version)] = up
         return up, self._add(up, files)
 
@@ -141,7 +206,8 @@ class Uploads:
         return up
 
     def add(self, name: str, version: str, who: str, value) -> list[dict]:
-        return self._add(self.get(name, version, who), file_list(value))
+        up = self.get(name, version, who)
+        return self._add(up, file_list(value, up.markdown is not None))
 
     def _add(self, up: Pending, files: dict[str, int]) -> list[dict]:
         with self.lock:
@@ -187,6 +253,29 @@ class Uploads:
         if wrong:
             more = f" and {len(wrong) - 5} more" if len(wrong) > 5 else ""
             raise Refused(409, "not uploaded as announced: " + ", ".join(wrong[:5]) + more)
-        page = page_record(name, version, up.who, up.description, up.meta, up.git, len(up.files))
+        try:
+            tagged = labels(self.store, name, up.pillar, up.tags, up.milestone, self.find)
+        except ValueError as err:
+            raise Refused(400, str(err)) from None
+        title, fmt, made, kept = up.title, "html", {}, 0
+        current = self.store.current(name) if up.keep else None
+        if current:
+            src, dst = self.store.key(name, current) + "/", self.store.key(name, version) + "/"
+            skip = {*up.files, META_FILE, "index.html", MARKDOWN_FILE}
+            for path in [p for p in self.store.sizes(src) if p not in skip]:
+                self.store.copy(src + path, dst + path)
+                kept += 1
+        if up.markdown is not None:
+            from .markdown import title_of
+
+            title = title or clean_title(title_of(up.markdown)) or name
+            made = markdown_files(up.markdown, title, f"{up.who}, {stamp(version_iso(version))}")
+            fmt = "markdown"
+            for rel, data in made.items():
+                self.store.put(self.store.key(name, version, rel), data)
+        page = page_record(
+            name, version, up.who, up.description, up.meta, up.git,
+            len(up.files) + len(made) + kept, tagged, title, fmt,
+        )  # fmt: skip
         finish(self.store, page, up.visibility)
         return page, up.visibility

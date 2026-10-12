@@ -121,7 +121,7 @@
     who.title = email || "";
     line.appendChild(who);
     var when = el("span", "cm-when", relative(iso));
-    when.title = iso ? iso.slice(0, 16).replace("T", " ") + " UTC" : "";
+    when.title = window.onticBar ? window.onticBar.when(iso) : iso || "";
     line.appendChild(when);
     return line;
   }

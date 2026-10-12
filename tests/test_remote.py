@@ -79,7 +79,8 @@ def test_publish_through_the_gateway(local, gateway_env, store, s3, uploads, sit
     srv = local()
     gateway_env(srv, OWNER)
     main(["publish", str(site), "--name", "report", "--description", "first",
-          "--meta", "model=abc", "--visibility", "private"])  # fmt: skip
+          "--meta", "model=abc", "--visibility", "private",
+          "--pillar", "robot-learning", "--tag", "franka", "--tag", "eval"])  # fmt: skip
     out = capsys.readouterr().out
     version = store.current("report")
     assert f"published report version {version} (6 files)" in out
@@ -88,6 +89,7 @@ def test_publish_through_the_gateway(local, gateway_env, store, s3, uploads, sit
     page = store.meta("report", version)
     assert (page["published_by"], page["description"]) == (OWNER, "first")
     assert page["meta"] == {"model": "abc"}
+    assert (page["pillar"], page["tags"]) == ("robot-learning", ["eval", "franka"])
     assert page["files"] == 6 and store.visibility("report") == "private"
     # Every file went straight to the bucket, with its signed content type.
     puts = dict(uploads.puts)
@@ -114,6 +116,29 @@ def test_publish_in_batches_with_a_retry(local, gateway_env, store, uploads, sit
     assert len(store.versions("report")) == 1
 
 
+def test_pillar_and_tags_through_the_gateway(local, gateway_env, store, site):
+    gateway_env(local(), OWNER)
+
+    def published():
+        page = store.meta("report", store.current("report"))
+        return page["pillar"], page["tags"]
+
+    main(["publish", str(site), "--name", "report"])
+    assert published() == ("other", [])  # a new page without them
+    main(["publish", str(site), "--name", "report", "--pillar", "data", "--tag", "eval"])
+    assert published() == ("data", ["eval"])
+    main(["publish", str(site), "--name", "report"])
+    assert published() == ("data", ["eval"])  # kept
+    main(["publish", str(site), "--name", "report", "--tag", "a", "--tag", "b"])
+    assert published() == ("data", ["a", "b"])  # replaced
+    main(["publish", str(site), "--name", "report", "--no-tags", "--pillar", "other"])
+    assert published() == ("other", [])
+    with pytest.raises(SystemExit, match="bad tag"):
+        main(["publish", str(site), "--name", "report", "--tag", "no spaces"])
+    with pytest.raises(SystemExit):
+        main(["publish", str(site), "--name", "report", "--pillar", "infra"])
+
+
 def test_publish_someone_elses_page(local, gateway_env, store, site):
     publish(store, site, "theirs", published_by=OTHER, now=T1)
     gateway_env(local(), OWNER)
@@ -132,11 +157,12 @@ def test_list_info_share_set_current(local, gateway_env, store, site, capsys):
     main(["list"])
     lines = capsys.readouterr().out.splitlines()
     assert len(lines) == 1 and lines[0].startswith("report") and " ontic " in lines[0]
-    assert later in lines[0] and "second" in lines[0]
+    assert " other " in lines[0] and "second" in lines[0]
     main(["list", "--name", "report"])
     lines = capsys.readouterr().out.splitlines()
     assert lines[0] == "visibility: ontic"
-    assert lines[1].startswith(f"* {later}  {OWNER}  second")
+    assert lines[1].startswith(f"* {later}  ") and lines[1].endswith(f"  {OWNER}  second")
+    assert lines[2].startswith(f"  {first}  07.10.2026 17:30  {OWNER}")
     assert lines[2].startswith(f"  {first}")
 
     main(["info", "report"])

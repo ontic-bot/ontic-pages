@@ -53,8 +53,11 @@ def test_short():
 
 def publish_two(store, site, monkeypatch):
     monkeypatch.setattr("ontic_pages.publish.git_provenance", lambda cwd: GIT)
-    first = publish(store, site, "report", "first <i>try</i>", {"seed": "7"}, now=T1)
-    publish(store, site, "report", LONG, now=T2)
+    first = publish(
+        store, site, "report", "first <i>try</i>", {"seed": "7"}, now=T1,
+        pillar="world-models", tags=["Depth", "eval", "depth"],
+    )  # fmt: skip
+    publish(store, site, "report", LONG, now=T2)  # keeps the pillar and tags
     store.set_current("report", first["version"])
     return first
 
@@ -63,8 +66,10 @@ def test_page_json_fields(store, site, monkeypatch):
     first = publish_two(store, site, monkeypatch)
     saved = store.meta("report", first["version"])
     assert list(saved) == [
-        "name", "version", "published_at", "published_by", "description", "meta", "git", "files",
+        "name", "version", "published_at", "published_by", "title", "description", "pillar",
+        "tags", "milestone", "format", "meta", "git", "files",
     ]  # fmt: skip
+    assert (saved["pillar"], saved["tags"]) == ("world-models", ["depth", "eval"])
     assert "inputs" not in saved
 
 
@@ -86,7 +91,10 @@ def test_info_page(store, site, monkeypatch, serve):
         '0123456789abcdef0123456789abcdef01234567">01234567</a>'
     ) in text
     assert "uncommitted changes" in text
-    assert "<tr class=current><td>20261007T153000Z (current)</td>" in text
+    assert "<tr class=current><td>20261007T153000Z (current)</td><td>07.10.2026 17:30</td>" in text
+    assert "<th>Published</th><td>07.10.2026 17:30 by " in text
+    assert "<th>Pillar</th><td>World models</td>" in text
+    assert "<th>Tags</th><td>depth, eval</td>" in text
     assert f'<span title="{LONG}">{LONG[:59].rstrip()}…</span>' in text
     assert '<a href="/report/_info">info</a>' in listing
 
@@ -106,6 +114,7 @@ def test_details_api(store, site, monkeypatch, serve):
         "name": "report", "version": first, "current": first, "visibility": "ontic",
         "published_at": "2026-10-07T15:30:00+00:00", "published_by": d["published_by"],
         "description": "first <i>try</i>", "meta": {"seed": "7"}, "files": 6,
+        "pillar": "world-models", "tags": ["depth", "eval"],
         "git": {
             **GIT,
             "repo_url": "https://github.com/onticlabs/experiments",
@@ -115,6 +124,7 @@ def test_details_api(store, site, monkeypatch, serve):
     # An old version: its own fields; empty ones are left out.
     status, d = details_of(srv, f"/_api/pages/report/versions/{second}")
     assert (status, d["version"], d["current"], d["description"]) == (200, second, first, LONG)
+    assert (d["pillar"], d["tags"]) == ("world-models", ["depth", "eval"])
     assert "meta" not in d
     assert details_of(srv, "/_api/pages/report/versions/20990101T000000Z")[0] == 404
     assert details_of(srv, "/_api/pages/ghost/versions/20990101T000000Z")[0] == 404

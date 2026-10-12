@@ -136,6 +136,31 @@ itself, the shell and the page's files alike, and before every answer (304s too)
   answers `/_tls-ask` with 404 on both public sites; the gateway answers it only for
   a Host that is neither the apex nor a page host.
 
+## What changed with the research overview
+
+- **One-time: a CORS rule on the bucket**, so the overview's composer can PUT images and videos
+  straight to B2 with the presigned URLs (bytes still never pass the gateway or Caddy). Run it
+  once with a B2 key that may change buckets (the account key), not the gateway's:
+
+  ```sh
+  b2 bucket update --cors-rules '[{"corsRuleName": "overview-uploads",
+    "allowedOrigins": ["https://pages.onticlabs.io"], "allowedOperations": ["s3_put"],
+    "allowedHeaders": ["content-type"], "exposeHeaders": ["etag"], "maxAgeSeconds": 3600}]' \
+    ontic-pages
+  ```
+
+  Without it everything works but uploads from the browser: the composer says the bucket
+  refused the browser (CORS). Publishing from the command line never needs it.
+- **Three more files**: `<name>/labels.json` per page (labels changed in the table, and the
+  deleted flag; a publish writes it too), `_milestones.json` and `_views.json` at the bucket root,
+  written with the same key (nothing deleted; B2 keeps the overwritten copies). Page names
+  cannot start with `_`, so they never collide with a page.
+- **`/` is the overview** (its own script, `static/overview.js`, under a policy that allows
+  `connect-src` to the bucket's upload host and images from the page hosts). Without script it
+  falls back to the plain list. Milestones and views are for `@onticlabs.io` accounts only.
+- **No new secret, no Caddy change.** Markdown travels in one request (at most 48 KB of text,
+  under the 64 KB cap); the gateway renders it and writes `index.html` and `update.md` itself.
+
 ## What changed with comments (phase 3)
 
 - **The gateway writes one more file per page**, `<name>/comments.json`, with the same key (no

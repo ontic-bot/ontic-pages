@@ -25,6 +25,15 @@ On the apex (the host of ONTIC_PAGES_URL, pages.onticlabs.io):
                                         {"resolved"}, .../<thread>/<comment>/delete (its author)
     POST /_api/pages/<name>/edits       {version, path, changes}: text edited in the bar, saved
                                         as a new version, by the owner only (edits.py)
+    POST /_api/pages/<name>/labels      {pillar, tags, milestone, title, description}: the
+                                        owner relinks a report (a new version, files copied)
+    GET  /_api/pages/<name>/source      a Markdown update's source, for Edit in the overview
+    GET  /                              the research overview (static/overview.js), signed in
+    GET  /_api/overview                 what it draws: reports, milestones, saved views
+    GET  /_api/milestones               every milestone (milestones.py), team only
+    POST /_api/milestones               a new one; .../<id> changes it (anyone on the team)
+    POST /_api/views                    a saved view; .../<id> changes it, .../<id>/delete
+                                        removes it (its creator)
     GET  /_cli/login?code=              the command line's sign-in: Allow (tokens.py)
     POST /_api/cli/approve              {"code": ...}, from that page
     GET  /_api/cli/token?code=          the command line asks for its token
@@ -69,17 +78,41 @@ from .auth import (
     allowed,
     fixed,
 )
-from .cache import MB, FileCache, PageCache
+from .cache import MB, FileCache, LabelCache, PageCache
 from .comments import Comments, listing
 from .comments import view as thread_view
 from .config import DEFAULT_URL
 from .edits import Phases
 from .edits import save as save_edits
-from .info import DESCRIPTION_CHARS, NAME_CHARS, details, history, info_html, short
+from .info import (
+    DESCRIPTION_CHARS,
+    NAME_CHARS,
+    PILLAR_LABELS,
+    details,
+    history,
+    info_html,
+    pillar_of,
+    short,
+    stamp,
+    tags_of,
+    version_stamp,
+)
+from .milestones import ID_RE as MILESTONE_ID_RE
+from .milestones import VIEW_ID_RE, Milestones, Views, now
+from .publish import LABEL_KEYS, MARKDOWN_FILE, clean_title, effective
 from .pull import presigned_files
-from .shell import Assets, inject, login_html, shell_csp, shell_html
+from .shell import (
+    Assets,
+    inject,
+    login_html,
+    overview_csp,
+    overview_html,
+    shell_csp,
+    shell_html,
+)
 from .store import (
     NAME_RE,
+    PILLARS,
     RESERVED_NAMES,
     VERSION_RE,
     VISIBILITIES,
@@ -99,13 +132,18 @@ API_FILES = re.compile(r"^/_api/pages/([^/]+)/files$")
 API_VERSION = re.compile(r"^/_api/pages/([^/]+)/versions/(\d{8}T\d{6}Z)$")
 API_WRITE = re.compile(
     r"^/_api/pages/([^/]+)/"
-    r"(visibility|current|edits|versions|versions/(\d{8}T\d{6}Z)/(files|commit))$"
+    r"(visibility|current|edits|labels|delete|versions|versions/(\d{8}T\d{6}Z)/(files|commit))$"
+)
+API_SOURCE = re.compile(r"^/_api/pages/([^/]+)/source$")
+RESEARCH_WRITE = re.compile(
+    r"^/_api/(?:milestones(?:/([a-z0-9][a-z0-9-]{0,47}))?|views(?:/([0-9a-f]{8})(/delete)?)?)$"
 )
 API_COMMENTS = re.compile(r"^/_api/pages/([^/]+)/comments$")
 COMMENT_WRITE = re.compile(
     r"^/_api/pages/([^/]+)/comments(?:/([0-9a-f]{16})/(?:(reply|resolve)|([0-9a-f]{16})/delete))?$"
 )
 APPROVE = "/_api/cli/approve"
+PREVIEW = "/_api/preview"
 SECRET_QUERY = re.compile(r"\b(code)=[^&\s]+")
 EXPIRED = "not signed in, or the sign-in expired: run ontic pages login"
 SMALL_BODY, LIST_BODY = 4096, 64 * 1024  # Caddy refuses anything over 64 KB anyway
@@ -184,13 +222,64 @@ class Gateway:
         self.codes = LoginCodes()
         self.uploads = Uploads(store)
         self.comments = Comments(store, ttl)
+        self.milestones = Milestones(store, ttl)
+        self.views = Views(store, ttl)
+        self.labels = LabelCache(store, ttl)
+        self.uploads.find = self.milestones.find
+        self._upload_origin: str | None = None
 
-    def visible(self, email: str):
-        """(name, current, visibility, owner, page.json) of each page this viewer may open."""
+    @property
+    def upload_origin(self) -> str:
+        """Where browsers PUT files (the bucket's presigned URLs), for the overview's policy."""
+        if self._upload_origin is None:
+            url = urlsplit(self.store.presign_put(self.store.key("_probe"), 60)[0])
+            self._upload_origin = f"{url.scheme}://{url.netloc}" if url.netloc else ""
+        return self._upload_origin
+
+    def team(self, email: str) -> bool:
+        """Signed in with the team's domain: may see and change milestones and views."""
+        return bool(email) and allowed("ontic", "", email, self.site.email_domain)
+
+    def overview(self, email: str) -> dict:
+        """What the overview draws: every report this viewer may open, newest first, and for
+        the team the milestones and saved views."""
+        reports = [report(*row) for row in self.visible(email)]
+        reports.sort(key=lambda r: r["published_at"], reverse=True)
+        team = self.team(email)
+        return {
+            "viewer": email,
+            "team": team,
+            "pillars": [{"id": p, "label": PILLAR_LABELS[p]} for p in PILLARS],
+            "reports": reports,
+            "milestones": self.milestones.items() if team else [],
+            "views": self.views.items() if team else [],
+            "deleted": [report(*row) for row in self.visible(email, deleted=True)],
+            "content_origin": self.site.content_origin("__name__"),
+        }
+
+    def lookup(self, name: str) -> tuple[str | None, str, str]:
+        """(current, visibility, owner) of a page to serve: a deleted one has no current."""
+        version, visibility, owner = self.pages.get(name)
+        if version and self.labels.get(name).get("deleted"):
+            return None, visibility, owner
+        return version, visibility, owner
+
+    def meta(self, name: str, version: str) -> dict:
+        """The current version's page.json with the labels changed since (labels.json)."""
+        return effective(self.files.meta(name, version), self.labels.get(name))
+
+    def visible(self, email: str, deleted: bool = False):
+        """(name, current, visibility, owner, page.json with its labels) of each page this viewer
+        may open; with deleted, only the deleted ones this viewer owns."""
         for name in self.store.names():
             version, visibility, owner = self.pages.get(name)
-            if version and allowed(visibility, owner, email, self.site.email_domain):
-                yield name, version, visibility, owner, self.files.meta(name, version)
+            if not version or not allowed(visibility, owner, email, self.site.email_domain):
+                continue
+            if bool(self.labels.get(name).get("deleted")) != deleted:
+                continue
+            if deleted and owner.strip().lower() != email.strip().lower():
+                continue
+            yield name, version, visibility, owner, self.meta(name, version)
 
     def facts(self, name: str, email: str) -> dict:
         """What the bar shows. Emails only for a signed-in viewer."""
@@ -198,10 +287,17 @@ class Gateway:
         versions = []
         for version in reversed(self.pages.versions(name)):
             meta = self.files.meta(name, version)
+            if version == current:
+                meta = self.meta(name, version)
             item = {
                 "version": version,
                 "published_at": meta.get("published_at", ""),
                 "description": meta.get("description", ""),
+                "pillar": pillar_of(meta),
+                "tags": tags_of(meta),
+                "title": meta.get("title") or "",
+                "milestone": meta.get("milestone") or "",
+                "format": meta.get("format") or "html",
             }
             if email:
                 item["published_by"] = meta.get("published_by", "")
@@ -216,43 +312,91 @@ class Gateway:
             "email_domain": self.site.email_domain,
             "content_origin": self.site.content_origin(name),
             "versions": versions,
+            "milestones": self.milestone_titles(versions) if self.team(email) else {},
+        }
+
+    def milestone_titles(self, versions: list[dict]) -> dict:
+        """id -> {title, status} of the milestones these versions point at, for the bar."""
+        ids = {v["milestone"] for v in versions if v.get("milestone")}
+        return {
+            m["id"]: {"title": m.get("title", ""), "status": m.get("status", "open")}
+            for m in self.milestones.items()
+            if m.get("id") in ids
         }
 
 
-BADGE_CSS = """
-.badge { font-size: .75rem; padding: .05rem .4rem; border-radius: .6rem; border: 1px solid; }
-.private { color: #a33; } .ontic { color: #555; } .public { color: #276; }
-"""
+def report(name: str, version: str, visibility: str, owner: str, meta: dict) -> dict:
+    """One row of the overview's reports table."""
+    milestone = meta.get("milestone")
+    return {
+        "name": name,
+        "version": version,
+        "title": meta.get("title") or "",
+        "description": meta.get("description") or "",
+        "pillar": pillar_of(meta),
+        "tags": tags_of(meta),
+        "milestone": milestone if isinstance(milestone, str) else "",
+        "author": owner,
+        "published_at": meta.get("published_at") or "",
+        "visibility": visibility,
+        "format": meta.get("format") or "html",
+    }
 
 
-def listing_html(gw: Gateway, email: str) -> str:
+def listing_link(pillar: str, tag: str) -> str:
+    query = "&".join(f"{k}={quote(v)}" for k, v in (("pillar", pillar), ("tag", tag)) if v)
+    return "/" + (f"?{query}" if query else "")
+
+
+def listing_html(gw: Gateway, email: str, query: str = "") -> str:
+    """Every page the viewer may open, with the pillar filters on top (?pillar=<id>&tag=<tag>):
+    the overview's fallback without script (styled by static/overview.css)."""
+    e = html.escape
+    asked = parse_qs(query)
+    pillar = asked.get("pillar", [""])[0]
+    pillar = pillar if pillar in PILLARS else ""
+    tag = asked.get("tag", [""])[0].strip().lower()
+    counts = {p: 0 for p in PILLARS}
     rows = []
     for name, version, visibility, owner, meta in gw.visible(email):
+        if tag and tag not in tags_of(meta):
+            continue
+        counts[pillar_of(meta)] += 1
+        if pillar and pillar_of(meta) != pillar:
+            continue
+        tags = " ".join(
+            f'<a class="tag" href="{e(listing_link(pillar, t))}">{e(t)}</a>' for t in tags_of(meta)
+        )
         cells = [
             f'<a href="/{quote(name)}/">{short(name, NAME_CHARS)}</a>',
             f'<span class="badge {visibility}">{visibility}</span>',
-            short(meta.get("description", ""), DESCRIPTION_CHARS),
-            html.escape(meta.get("published_at", version)[:16].replace("T", " ")),
-            html.escape(owner),
+            f'<a class="pillar" href="{e(listing_link(pillar_of(meta), tag))}">'
+            f"{e(PILLAR_LABELS[pillar_of(meta)])}</a>",
+            short(meta.get("description", ""), DESCRIPTION_CHARS) + (f" {tags}" if tags else ""),
+            e(stamp(meta.get("published_at")) or version_stamp(version)),
+            e(owner),
             f'<a href="/{quote(name)}/_info">info</a>',
         ]
         rows.append("<tr>" + "".join(f"<td>{c}</td>" for c in cells) + "</tr>")
-    body = "\n".join(rows) or '<tr><td colspan="6">No pages yet.</td></tr>'
-    return f"""<!doctype html>
-<html><head><meta charset="utf-8"><title>Ontic pages</title>
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<style>
-body {{ font-family: system-ui, sans-serif; margin: 2rem auto; max-width: 70rem; padding: 0 1rem; }}
-table {{ border-collapse: collapse; width: 100%; }}
-td, th {{ text-align: left; padding: .4rem .6rem; border-bottom: 1px solid #ddd; }}
-td {{ white-space: nowrap; }}
-{BADGE_CSS}
-</style></head><body>
-<h1>Ontic pages</h1>
-<table><tr><th>Page</th><th>Visibility</th><th>Description</th><th>Published</th><th>By</th><th></th></tr>
+    empty = "No pages here." if pillar or tag else "No pages yet."
+    body = "\n".join(rows) or f'<tr><td colspan="7">{empty}</td></tr>'
+    choices = [("", "All", sum(counts.values()))]
+    choices += [(p, PILLAR_LABELS[p], counts[p]) for p in PILLARS]
+    nav = " ".join(
+        f'<a href="{e(listing_link(p, tag))}"{' aria-current="page"' if p == pillar else ""}>'
+        f'{e(label)} <span class="n">{n}</span></a>'
+        for p, label, n in choices
+    )
+    if tag:
+        nav += (
+            f' <span class="filter">tag <b>{e(tag)}</b> '
+            f'<a href="{e(listing_link(pillar, ""))}">clear</a></span>'
+        )
+    return f"""<div class="plain"><h1>Ontic pages</h1>
+<nav aria-label="Pillars">{nav}</nav>
+<table><tr><th>Page</th><th>Visibility</th><th>Pillar</th><th>Description</th><th>Published</th><th>By</th><th></th></tr>
 {body}
-</table></body></html>
-"""
+</table></div>"""
 
 
 def bad_path(rest: str) -> bool:
@@ -423,7 +567,7 @@ def make_handler(gw: Gateway):
             """Caddy asks before getting a certificate for a host: only existing pages."""
             domain = parse_qs(query).get("domain", [""])[0]
             name = site.page_of(domain)
-            exists = bool(name and gw.pages.get(name)[0])
+            exists = bool(name and gw.lookup(name)[0])
             return self.send_text(200 if exists else 404, "ok\n" if exists else "no such page\n")
 
         def apex_get(self, path: str, query: str):
@@ -432,7 +576,16 @@ def make_handler(gw: Gateway):
                 email = self.email()
                 if not email:
                     return self.redirect(site.sign_in(f"{site.origin}/"), 302)
-                return self.send_html(200, listing_html(gw, email))
+                page = overview_html(email, gw.assets, listing_html(gw, email, query))
+                return self.send_body(200, page.encode(), {
+                    "Content-Type": "text/html; charset=utf-8",
+                    "Cache-Control": "no-cache",
+                    "X-Content-Type-Options": "nosniff",
+                    "Content-Security-Policy": overview_csp(
+                        gw.upload_origin, f"{site.scheme}://*.{site.content_suffix}"
+                    ),
+                    "Referrer-Policy": "no-referrer",
+                })  # fmt: skip
             if found := gw.assets.lookup(path, content_host=False):
                 return self.send_asset(*found)
             if m := API_PAGE.match(path):
@@ -447,6 +600,10 @@ def make_handler(gw: Gateway):
                 return self.api_version(m.group(1), m.group(2))
             if path == "/_api/pages":
                 return self.api_list()
+            if path in ("/_api/overview", "/_api/milestones"):
+                return self.api_research(path)
+            if m := API_SOURCE.match(path):
+                return self.api_source(m.group(1))
             if path == "/_api/me":
                 if email := self.email():
                     return self.send_json(200, {"email": email})
@@ -462,7 +619,7 @@ def make_handler(gw: Gateway):
                 return self.send_text(404, "not found\n")
             if not slash:
                 return self.redirect(f"/{quote(name)}/{q}")
-            version, visibility, owner = gw.pages.get(name)
+            version, visibility, owner = gw.lookup(name)
             if not version:
                 return self.send_text(404, f"no page named {name}\n")
             here = f"{site.origin}{quote(path)}{q}"
@@ -506,7 +663,7 @@ def make_handler(gw: Gateway):
             """(current, visibility, owner, email) after the access check, else None (answered)."""
             if not NAME_RE.match(name) or name in RESERVED_NAMES:
                 return self.send_json(404, {"error": "no such page"})
-            version, visibility, owner = gw.pages.get(name)
+            version, visibility, owner = gw.lookup(name)
             if not version:
                 return self.send_json(404, {"error": f"no page named {name}"})
             email = self.email(required=required or visibility != "public")
@@ -570,10 +727,48 @@ def make_handler(gw: Gateway):
                     "published_by": owner,
                     "published_at": meta.get("published_at", ""),
                     "description": meta.get("description", ""),
+                    "pillar": pillar_of(meta),
+                    "tags": tags_of(meta),
+                    "title": meta.get("title") or "",
+                    "milestone": meta.get("milestone") or "",
                 }
                 for name, version, visibility, owner, meta in gw.visible(email)
             ]
             self.send_json(200, {"pages": pages})
+
+        def api_research(self, path: str):
+            """The overview's data, or the milestones alone (the command line). Signed in; a
+            page's own scripts get nothing."""
+            if self.headers.get("Sec-Fetch-Site") not in (None, "same-origin", "none"):
+                return self.send_json(403, {"error": "read by the overview"})
+            email = self.email()
+            if not email:
+                return self.send_json(401, {"error": EXPIRED})
+            if path == "/_api/overview":
+                return self.send_json(200, gw.overview(email))
+            if not gw.team(email):
+                return self.send_json(403, {"error": f"only @{site.email_domain} accounts"})
+            self.send_json(200, {"milestones": gw.milestones.items()})
+
+        def api_source(self, name: str):
+            """A Markdown update's source and labels, for Edit in the overview (its owner)."""
+            if self.headers.get("Sec-Fetch-Site") not in (None, "same-origin", "none"):
+                return self.send_json(403, {"error": "read by the overview"})
+            found = self.api_page(name, required=True)
+            if not found:
+                return
+            current, email = found[0], found[3]
+            if not email:
+                return self.send_json(401, {"error": EXPIRED})
+            meta = gw.files.meta(name, current)
+            if meta.get("format") != "markdown":
+                return self.send_json(404, {"error": f"{name} is not a Markdown update"})
+            raw = gw.files.read(name, current, MARKDOWN_FILE)
+            self.send_json(200, {
+                "name": name, "version": current, "markdown": (raw or b"").decode("utf-8"),
+                **{k: v for k, v in report(name, current, found[1], found[2], meta).items()
+                   if k in ("title", "description", "pillar", "tags", "milestone")},
+            })  # fmt: skip
 
         def api_comments(self, name: str):
             """Every thread of the page, newest activity first, for a signed-in viewer who may
@@ -640,17 +835,19 @@ def make_handler(gw: Gateway):
             self.on_apex = host == site.apex
             m = API_WRITE.match(path)
             c = COMMENT_WRITE.match(path)
+            r = RESEARCH_WRITE.match(path)
             big = bool(m and m.group(2).startswith("versions") and m.group(4) != "commit")
-            big = big or bool(m and m.group(2) == "edits")
+            big = big or bool(m and m.group(2) == "edits") or path == PREVIEW
             try:
                 length = int(self.headers.get("Content-Length") or 0)
             except ValueError:
                 length = -1
-            if not 0 <= length <= (COMMENT_BODY if c else LIST_BODY if big else SMALL_BODY):
+            limit = COMMENT_BODY if c or r else LIST_BODY if big else SMALL_BODY
+            if not 0 <= length <= limit:
                 self.close_connection = True
                 return self.send_json(413, {"error": "body too large"})
             body = self.rfile.read(length)
-            if not self.on_apex or not (m or c or path == APPROVE):
+            if not self.on_apex or not (m or c or r or path in (APPROVE, PREVIEW)):
                 return self.send_json(404 if self.on_apex else 405, {"error": "no writes here"})
             if self.token_refused():
                 return
@@ -673,6 +870,10 @@ def make_handler(gw: Gateway):
             try:
                 if c:
                     return self.comment_write(c, data)
+                if r:
+                    return self.research_write(r, data)
+                if path == PREVIEW:
+                    return self.preview(data)
                 if path == APPROVE:
                     return self.approve(data)
                 name = m.group(1)
@@ -682,6 +883,10 @@ def make_handler(gw: Gateway):
                     return self.publish_more(name, m.group(3), m.group(4), data)
                 if m.group(2) == "edits":
                     return self.save_edits(name, data)
+                if m.group(2) == "labels":
+                    return self.relabel(name, data)
+                if m.group(2) == "delete":
+                    return self.delete_page(name, data)
                 found = self.api_page(name, required=True)
                 if not found:
                     return
@@ -768,6 +973,112 @@ def make_handler(gw: Gateway):
             self.log_message("comment %s %s %s", what, name, done["id"])
             self.send_json(status, {"thread": thread_view(done, email)})
 
+        def research_write(self, r, data):
+            """A milestone (new or changed) or a saved view (new, changed, deleted), by anyone
+            signed in with the team's domain (milestones.py checks the fields)."""
+            milestone, view, delete = r.groups()
+            email = self.email()
+            if not email:
+                return self.send_json(401, {"error": EXPIRED})
+            if not gw.team(email):
+                return self.send_json(403, {"error": f"only @{site.email_domain} accounts"})
+            if not gw.limit.allow(email.lower()):
+                return self.send_json(429, {"error": "too many changes, wait a minute"})
+            if self.path.split("?")[0].startswith("/_api/milestones"):
+                if milestone is None:
+                    done, status = gw.milestones.create(data, email), 201
+                else:
+                    if not MILESTONE_ID_RE.match(milestone):
+                        return self.send_json(404, {"error": "no such milestone"})
+                    done, status = gw.milestones.update(milestone, data, email), 200
+                self.log_message("milestone %s", done["id"])
+                return self.send_json(status, {"milestone": done})
+            if view is None:
+                done, status = gw.views.create(data, email), 201
+            elif not VIEW_ID_RE.match(view):
+                return self.send_json(404, {"error": "no such view"})
+            elif delete:
+                done, status = gw.views.delete(view, email), 200
+            else:
+                done, status = gw.views.update(view, data, email), 200
+            self.send_json(status, {"view": done})
+
+        def preview(self, data):
+            """The composer's preview: the page a Markdown update becomes (nothing is saved)."""
+            from .markdown import page_html, render
+
+            if not self.email():
+                return self.send_json(401, {"error": EXPIRED})
+            data = data if isinstance(data, dict) else {}
+            text, title = data.get("markdown"), data.get("title") or ""
+            if not isinstance(text, str) or not isinstance(title, str):
+                raise Refused(400, "send {markdown, title}")
+            self.send_json(200, {"html": page_html(title, render(text, title), "Preview")})
+
+        def relabel(self, name: str, data):
+            """Anyone on the team who may open the page changes its pillar, tags, milestone or
+            title, as in a Notion table: labels.json, no new version."""
+            from .uploads import page_labels
+
+            found = self.api_page(name, required=True)
+            if not found:
+                return
+            current, visibility, owner, email = found
+            if not email:
+                raise Refused(401, EXPIRED)
+            if not gw.team(email):
+                raise Refused(403, f"only @{site.email_domain} accounts change labels")
+            if not gw.limit.allow(email.lower()):
+                raise Refused(429, "too many changes, wait a minute")
+            data = data if isinstance(data, dict) else {}
+            pillar, tags, milestone = page_labels(data)
+            if milestone and gw.milestones.find(milestone) is None:
+                raise Refused(400, f"no milestone {milestone!r}")
+            title = data.get("title")
+            if title is not None and (not isinstance(title, str) or not title.strip()):
+                raise Refused(400, "title: text")
+            given = {"pillar": pillar, "tags": tags, "milestone": milestone,
+                     "title": None if title is None else clean_title(title)}  # fmt: skip
+            labels = {**gw.labels.get(name)}
+            meta = gw.meta(name, current)
+            for key in LABEL_KEYS:
+                labels.setdefault(key, meta.get(key))
+            labels.update({k: v for k, v in given.items() if v is not None})
+            labels.update(updated_by=email, updated_at=now())
+            gw.store.set_labels(name, labels)
+            gw.labels.put(name, labels)
+            self.log_message("labels %s", name)
+            self.send_json(200, {"report": report(name, current, visibility, owner,
+                                                  gw.meta(name, current))})  # fmt: skip
+
+        def delete_page(self, name: str, data):
+            """The owner deletes a page, or brings it back ({"deleted": false}): it is hidden
+            everywhere and its addresses answer 404; nothing is removed from the bucket."""
+            if not NAME_RE.match(name):
+                raise Refused(404, "no such page")
+            current, visibility, owner = gw.pages.get(name)
+            if not current:
+                raise Refused(404, f"no page named {name}")
+            email = self.email()
+            if not email:
+                raise Refused(401, EXPIRED)
+            if email.strip().lower() != owner.strip().lower():
+                raise Refused(403, f"only {owner or 'its owner'} can delete {name}")
+            if not gw.limit.allow(email.lower()):
+                raise Refused(429, "too many changes, wait a minute")
+            deleted = (data or {}).get("deleted", True) if isinstance(data, dict) else True
+            if not isinstance(deleted, bool):
+                raise Refused(400, "deleted: true or false")
+            labels = {**gw.labels.get(name), "deleted": deleted, "deleted_by": email,
+                      "deleted_at": now()}  # fmt: skip
+            if not deleted:
+                for key in ("deleted", "deleted_by", "deleted_at"):
+                    labels.pop(key, None)
+            gw.store.set_labels(name, labels)
+            gw.labels.put(name, labels)
+            self.log_message("%s %s", "delete" if deleted else "restore", name)
+            self.send_json(200, {"name": name, "deleted": deleted})
+
         def may_publish(self, name: str) -> str:
             """The publisher's email: a team member for a new page, the owner for a new version
             of an existing one. Raises Refused otherwise."""
@@ -847,7 +1158,7 @@ def make_handler(gw: Gateway):
             rest = path[1:]
             if bad_path(rest):
                 return self.send_text(404, "not found\n")
-            current, visibility, owner = gw.pages.get(name)
+            current, visibility, owner = gw.lookup(name)
             if not current:
                 return self.send_text(404, f"no page named {name}\n")
             version, base = current, "/"
