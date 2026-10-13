@@ -15,6 +15,11 @@ Read from ~/.config/ontic-pages/config.toml, then overridden by environment vari
     access_key_id     AWS_ACCESS_KEY_ID
     secret_access_key AWS_SECRET_ACCESS_KEY
     token_secret      ONTIC_PAGES_TOKEN_SECRET  (the gateway only: signs the command line's tokens)
+    github_token      ONTIC_PAGES_GITHUB_TOKEN  (the gateway only: syncs milestones with GitHub's,
+                                             github.py; none: no sync)
+    github_repo       ONTIC_PAGES_GITHUB_REPO   (default "onticlabs/experiments")
+    github_owner      ONTIC_PAGES_GITHUB_OWNER  (an email: the owner of milestones made on GitHub
+                                             without one; needed with a token)
 
 Credentials left unset fall through to boto3's own lookup (AWS_PROFILE, ~/.aws). The command line
 talks to the gateway at `url` with the token from `ontic-pages login` (token_path()), unless direct.
@@ -32,6 +37,7 @@ DEFAULT_BUCKET = "ontic-pages"
 DEFAULT_ENDPOINT = "https://s3.eu-central-003.backblazeb2.com"
 DEFAULT_REGION = "eu-central-003"
 DEFAULT_URL = "https://pages.onticlabs.io"
+DEFAULT_GITHUB_REPO = "onticlabs/experiments"
 
 ENV = {
     "bucket": "ONTIC_PAGES_BUCKET",
@@ -45,6 +51,9 @@ ENV = {
     "access_key_id": "AWS_ACCESS_KEY_ID",
     "secret_access_key": "AWS_SECRET_ACCESS_KEY",
     "token_secret": "ONTIC_PAGES_TOKEN_SECRET",
+    "github_token": "ONTIC_PAGES_GITHUB_TOKEN",
+    "github_repo": "ONTIC_PAGES_GITHUB_REPO",
+    "github_owner": "ONTIC_PAGES_GITHUB_OWNER",
 }
 
 
@@ -61,6 +70,9 @@ class Config:
     access_key_id: str | None = None
     secret_access_key: str | None = None
     token_secret: str = ""
+    github_token: str = ""
+    github_repo: str = DEFAULT_GITHUB_REPO
+    github_owner: str = ""
 
     @property
     def is_direct(self) -> bool:

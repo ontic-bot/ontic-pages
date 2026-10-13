@@ -15,6 +15,7 @@ from .auth import DEFAULT_AUTH_URL
 from .cache import MB
 from .config import Config, command_name, load_config, token_path
 from .info import history, info_text, pillar_of, stamp, tags_of, version_stamp
+from .milestones import EMAIL_RE
 from .publish import publish
 from .store import (
     PILLARS,
@@ -329,6 +330,8 @@ def cmd_gateway(args) -> None:
     # *.localhost to this machine), over plain http.
     url = args.url or (f"http://localhost:{args.port}" if args.local_as else cfg.url)
     suffix = args.content_suffix or ("" if args.local_as and not args.url else cfg.content_suffix)
+    if cfg.github_token and not EMAIL_RE.match(cfg.github_owner):
+        raise SystemExit("ONTIC_PAGES_GITHUB_OWNER: the email that owns milestones made on GitHub")
     gateway.serve(
         store, args.host, args.port,
         site=gateway.Site(url.rstrip("/"), suffix, args.email_domain),
@@ -338,6 +341,8 @@ def cmd_gateway(args) -> None:
         cache_bytes=int(args.cache_mb * MB),
         file_bytes=int(args.cache_file_mb * MB),
         token_secret=cfg.token_secret,
+        github=gateway.GitHub(cfg.github_token, cfg.github_repo) if cfg.github_token else None,
+        github_owner=cfg.github_owner,
     )  # fmt: skip
 
 

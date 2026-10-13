@@ -3,7 +3,9 @@ bucket root, next to the pages (page names cannot start with `_`, so nothing col
 
     <prefix>_milestones.json   {"milestones": [{id, title, kind, pillar, owner, criteria, next,
                                 target, status, result, negative, evidence, created_by,
-                                created_at, updated_by, updated_at, closed_at}]}
+                                created_at, updated_by, updated_at, closed_at, and when kept
+                                in step with GitHub (github.py): github {number, url, remote,
+                                base}, sync_error, deleted, deleted_at, deleted_by}]}
     <prefix>_views.json        {"views": [{id, name, config, created_by, created_at,
                                 updated_by, updated_at}]}
 
@@ -32,7 +34,7 @@ import secrets
 import threading
 import time
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 from .comments import CONTROL
 from .store import PILLARS, Store, check_name
@@ -147,6 +149,8 @@ class Milestones(Doc):
         super().__init__(store, MILESTONES_FILE, "milestones", ttl)
 
     def find(self, milestone_id: str) -> dict | None:
+        """The milestone, also one in the bin: a report linked to it keeps its link (the overview
+        offers only the others for new links)."""
         return next((m for m in self.items() if m.get("id") == milestone_id), None)
 
     def create(self, body, who: str) -> dict:
@@ -178,16 +182,41 @@ class Milestones(Doc):
             item = next((m for m in items if m.get("id") == milestone_id), None)
             if item is None:
                 raise Refused(404, f"no milestone {milestone_id}")
-            merged = clean_milestone({**item, **body}, who, new=False)
-            was_open = item.get("status") == "open"
-            item.update(merged, updated_by=who, updated_at=now())
-            if was_open and item["status"] != "open":
-                item["closed_at"] = item["updated_at"]
-            elif item["status"] == "open":
-                item["closed_at"] = None
+            if item.get("deleted"):
+                if body != {"deleted": False}:
+                    raise Refused(409, "this milestone is in the bin: restore it first")
+                # Restored: unlinked, so the GitHub sync creates it there again.
+                for key in ("deleted", "deleted_at", "deleted_by", "github", "sync_error"):
+                    item.pop(key, None)
+                item.update(updated_by=who, updated_at=now())
+                return item
+            if "deleted" in body:
+                raise Refused(400, "milestones are deleted on GitHub, not here")
+            set_fields(item, clean_milestone({**item, **body}, who, new=False), who)
             return item
 
         return self.change(change)
+
+
+def set_fields(item: dict, fields: dict, who: str) -> None:
+    """Change a milestone's fields (checked) as `who`: closed now when it leaves open."""
+    was_open = item.get("status") == "open"
+    item.update(fields, updated_by=who, updated_at=now())
+    if was_open and item["status"] != "open":
+        item["closed_at"] = item["updated_at"]
+    elif item["status"] == "open":
+        item["closed_at"] = None
+
+
+def real_date(value: str) -> bool:
+    """YYYY-MM-DD and a day that exists (not 2026-02-31)."""
+    if not DATE_RE.match(value):
+        return False
+    try:
+        date.fromisoformat(value)
+    except ValueError:
+        return False
+    return True
 
 
 def clean_milestone(body: dict, who: str, new: bool) -> dict:
@@ -204,7 +233,7 @@ def clean_milestone(body: dict, who: str, new: bool) -> dict:
     if not EMAIL_RE.match(owner):
         raise Refused(400, "owner: an email address")
     target = text(body.get("target"), "target", 10)
-    if target and not DATE_RE.match(target):
+    if target and not real_date(target):
         raise Refused(400, "target: a date, YYYY-MM-DD")
     evidence = text(body.get("evidence"), "evidence", 64)
     if evidence:

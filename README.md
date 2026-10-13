@@ -95,6 +95,18 @@ ontic-pages milestone update predict-1-s-of-particle-dynamics-from-rg --status a
     --result "4.2 mm at 1 s" --evidence dynamics-week-43
 ```
 
+The milestones are the GitHub milestones of `onticlabs/experiments` (the ones the Ontic Roadmap
+project shows), kept in step both ways by the gateway (`github.py`): add, edit, close or reopen
+one on either side and it shows on the other within about 30 seconds. On GitHub the fields
+GitHub lacks (kind, pillar, owner, next step, status, result, evidence) are bullet lines at the
+end of the milestone's description, below a marker comment; edit them there as they are. When
+both sides changed the same field since the last sync, the later edit wins; different fields
+both stay (GitHub is read again just before it is written; only an edit there in the same
+instant can still be written over). Milestones are deleted on GitHub only (Delete in the overview says so and links
+there); a deleted one moves to Deleted below the Milestones table, where Restore brings it back
+and creates it on GitHub again. What the sync cannot take (text too long, a title GitHub already
+has) shows in the milestone's dialog until someone fixes it on either side.
+
 A report points at a milestone with `publish --milestone <id>` (the milestone's pillar comes
 along; `--no-milestone` makes it exploratory again). Its title is its HTML `<title>` unless
 `--title` says otherwise, so an agent-written report needs no more than that. The owner can
@@ -254,6 +266,9 @@ Set environment variables, or put the same values in `~/.config/ontic-pages/conf
 | `access_key_id` | `AWS_ACCESS_KEY_ID` | key id (`--direct`, the gateway) |
 | `secret_access_key` | `AWS_SECRET_ACCESS_KEY` | key secret (`--direct`, the gateway) |
 | `token_secret` | `ONTIC_PAGES_TOKEN_SECRET` | the gateway only: signs the command line's tokens |
+| `github_token` | `ONTIC_PAGES_GITHUB_TOKEN` | the gateway only: keeps the milestones in step with GitHub's; unset, no sync |
+| `github_repo` | `ONTIC_PAGES_GITHUB_REPO` | the gateway only: whose milestones, default `onticlabs/experiments` |
+| `github_owner` | `ONTIC_PAGES_GITHUB_OWNER` | the gateway only, with a token: the email that owns milestones made on GitHub without one |
 
 ```toml
 # ~/.config/ontic-pages/config.toml  (chmod 600 when it holds a key)
@@ -312,7 +327,8 @@ even for public pages.
     <name>/comments.json           the comment threads, written by the gateway only
     <name>/labels.json             pillar, tags, milestone, title as changed since the last
                                    publish (over page.json), and deleted
-    _milestones.json               the milestones, written by the gateway only
+    _milestones.json               the milestones, written by the gateway only (with their
+                                   GitHub link and sync state, and deleted for the bin)
     _views.json                    the saved views of the overview, written by the gateway only
     <name>/<version>/page.json     the metadata
     <name>/<version>/...           the files

@@ -39,6 +39,9 @@ def line(m: dict) -> str:
         out.append(f"    evidence: {m['evidence']}")
     if m.get("closed_at"):
         out.append(f"    closed {stamp(m['closed_at'])}")
+    github = m.get("github") or {}
+    if github.get("url") and not github.get("gone"):
+        out.append(f"    github: {github['url']}")
     return "\n".join(out)
 
 

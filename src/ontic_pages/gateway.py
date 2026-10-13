@@ -84,6 +84,7 @@ from .comments import view as thread_view
 from .config import DEFAULT_URL
 from .edits import Phases
 from .edits import save as save_edits
+from .github import GitHub, Sync
 from .info import (
     DESCRIPTION_CHARS,
     NAME_CHARS,
@@ -226,6 +227,7 @@ class Gateway:
         self.views = Views(store, ttl)
         self.labels = LabelCache(store, ttl)
         self.uploads.find = self.milestones.find
+        self.sync: Sync | None = None  # the GitHub milestone sync, when it runs (github.py)
         self._upload_origin: str | None = None
 
     @property
@@ -251,11 +253,28 @@ class Gateway:
             "team": team,
             "pillars": [{"id": p, "label": PILLAR_LABELS[p]} for p in PILLARS],
             "reports": reports,
-            "milestones": self.milestones.items() if team else [],
+            "milestones": self.live_milestones() if team else [],
+            "milestones_deleted": [m for m in self.milestones.items() if m.get("deleted")]
+            if team
+            else [],
+            # Milestones are deleted on GitHub when the sync runs, never here.
+            "github": f"https://github.com/{self.sync.github.repo}/milestones"
+            if team and self.sync
+            else "",
+            # GitHub milestones the sync cannot import, and why (github.py).
+            "github_problems": [
+                {"number": n, "error": e} for n, e in sorted(self.sync.problems.items())
+            ]
+            if team and self.sync
+            else [],
             "views": self.views.items() if team else [],
             "deleted": [report(*row) for row in self.visible(email, deleted=True)],
             "content_origin": self.site.content_origin("__name__"),
         }
+
+    def live_milestones(self) -> list[dict]:
+        """Every milestone but those in the bin."""
+        return [m for m in self.milestones.items() if not m.get("deleted")]
 
     def lookup(self, name: str) -> tuple[str | None, str, str]:
         """(current, visibility, owner) of a page to serve: a deleted one has no current."""
@@ -748,7 +767,7 @@ def make_handler(gw: Gateway):
                 return self.send_json(200, gw.overview(email))
             if not gw.team(email):
                 return self.send_json(403, {"error": f"only @{site.email_domain} accounts"})
-            self.send_json(200, {"milestones": gw.milestones.items()})
+            self.send_json(200, {"milestones": gw.live_milestones()})
 
         def api_source(self, name: str):
             """A Markdown update's source and labels, for Edit in the overview (its owner)."""
@@ -992,6 +1011,8 @@ def make_handler(gw: Gateway):
                         return self.send_json(404, {"error": "no such milestone"})
                     done, status = gw.milestones.update(milestone, data, email), 200
                 self.log_message("milestone %s", done["id"])
+                if gw.sync:
+                    gw.sync.poke()
                 return self.send_json(status, {"milestone": done})
             if view is None:
                 done, status = gw.views.create(data, email), 201
@@ -1272,12 +1293,20 @@ def make_server(
     cache_bytes: int = 256 * MB,
     file_bytes: int = 4 * MB,
     token_secret: str = "",
+    github: GitHub | None = None,
+    github_owner: str = "",
 ) -> ThreadingHTTPServer:
     """identity: who sent a Cookie header; default: --local-as, else oauth2-proxy at auth_url.
-    token_secret: signs the command line's tokens; without it their routes answer 503."""
+    token_secret: signs the command line's tokens; without it their routes answer 503.
+    github: the repository whose milestones are kept in step with these (github.py), in a
+    thread started here; github_owner owns the ones made there."""
     if identity is None:
         identity = fixed(local_email) if local_email else OAuth2Proxy(auth_url, ttl=ttl)
     gw = Gateway(store, site or Site(), identity, ttl, cache_bytes, file_bytes, token_secret)
+    if github:
+        origin = gw.site.origin
+        gw.sync = Sync(gw.milestones, github, github_owner, lambda name: f"{origin}/{name}/")
+        gw.sync.start()
     server = ThreadingHTTPServer((host, port), make_handler(gw))
     server.daemon_threads = True
     return server
