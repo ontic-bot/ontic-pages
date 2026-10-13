@@ -261,7 +261,7 @@ a.pitem { text-decoration: none; }
 /* ---- shared form bits ------------------------------------------------------------------------ */
 .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 12px;
        border-radius: 7px; border: 1px solid var(--line); background: var(--card); cursor: pointer;
-       white-space: nowrap; font-weight: 500; }
+       white-space: nowrap; font-weight: 500; color: inherit; text-decoration: none; }
 .btn:hover { background: var(--hover); }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 .btn.primary:hover { filter: brightness(1.08); }

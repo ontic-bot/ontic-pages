@@ -116,6 +116,10 @@ ontic pages milestone update <id> --status achieved --result "what was shown" --
 ontic pages milestone update <id> --status answered --negative --result "no gain: 0.2 mm, within noise" --evidence <page>
 ```
 
+The milestones are the GitHub milestones of `onticlabs/experiments`, kept in step both ways:
+what you add or change here shows on GitHub within a minute, and the other way round. They
+are deleted on GitHub only, never here.
+
 A question is resolved by a clear answer, and a useful negative finding counts (`--negative`).
 Closing always needs `--result`: one or two sentences of what was learned, with numbers from
 the actual runs. Never close a milestone the user has not asked to close.

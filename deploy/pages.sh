@@ -22,7 +22,7 @@ UNITS="pages.network pages-gateway.container pages-oauth2-proxy.container"
 REQUIRED="GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET OAUTH2_COOKIE_SECRET OAUTH2_EMAIL_DOMAIN"
 REQUIRED="$REQUIRED ONTIC_PAGES_BUCKET ONTIC_PAGES_ENDPOINT ONTIC_PAGES_REGION AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY"
 REQUIRED="$REQUIRED ONTIC_PAGES_TOKEN_SECRET"
-OPTIONAL="ONTIC_PAGES_PREFIX"
+OPTIONAL="ONTIC_PAGES_PREFIX ONTIC_PAGES_GITHUB_TOKEN ONTIC_PAGES_GITHUB_REPO ONTIC_PAGES_GITHUB_OWNER"
 
 die() { echo "pages.sh: $*" >&2; exit 1; }
 
@@ -44,6 +44,12 @@ check_secrets() {
     done
     [ "$(val ONTIC_PAGES_TOKEN_SECRET | tr -d '\n' | wc -c | tr -d ' ')" -ge 32 ] \
         || die "$SRC: ONTIC_PAGES_TOKEN_SECRET is too short (openssl rand -base64 32)"
+    if [ -n "$(val ONTIC_PAGES_GITHUB_TOKEN)" ]; then
+        case "$(val ONTIC_PAGES_GITHUB_TOKEN)" in github_pat_*|ghp_*) ;;
+            *) die "$SRC: ONTIC_PAGES_GITHUB_TOKEN is not a GitHub token (github_pat_...); leave it empty for no sync" ;; esac
+        val ONTIC_PAGES_GITHUB_OWNER | grep -Eq '^[^@ ]+@[^@ ]+$' \
+            || die "$SRC: ONTIC_PAGES_GITHUB_TOKEN needs ONTIC_PAGES_GITHUB_OWNER (an email)"
+    fi
     echo "ok    $SRC is complete (no value printed)"
 }
 

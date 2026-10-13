@@ -39,6 +39,11 @@ See README.md for what it does and deploy/README.md for how it is hosted.
 - `src/ontic_pages/milestones.py`: the research overview's shared state, `_milestones.json` and
   `_views.json` at the bucket root (gateway-only writers like comments): checks of milestone
   fields and of a saved view's config. `milestones_cli.py`: `milestones` and `milestone add|update`.
+- `src/ontic_pages/github.py`: the milestones kept in step with the GitHub milestones of
+  `onticlabs/experiments`, both ways, by a thread in the gateway (polls every 30 s, and soon
+  after a change here): a field-by-field merge against the last synced fields, the extra fields
+  as bullet lines in the GitHub description, deleted on GitHub only (to the bin here, restorable).
+  Stdlib urllib; off without `ONTIC_PAGES_GITHUB_TOKEN`. Tests use a fake GitHub, never the API.
 - `src/ontic_pages/markdown.py`: Markdown updates on markdown-it-py (no raw HTML, safe URL
   schemes, image links to videos become players), math as MathML (latex2mathml, the output
   checked to MathML elements only), and the standalone page around it.

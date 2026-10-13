@@ -138,7 +138,7 @@
       .replace(/-+$/, "");
   }
   function milestone(id) {
-    return (data.milestones || []).filter(function (m) { return m.id === id; })[0] || null;
+    return (data.milestones || []).concat(data.milestones_deleted || []).filter(function (m) { return m.id === id; })[0] || null;
   }
   function titleOf(r) { return r.title || r.description || r.name; }
   function reportUrl(r) { return "/" + encodeURIComponent(r.name) + "/"; }
@@ -413,11 +413,15 @@
     else if (c.layout === "board") body = board(list, c);
     else if (c.layout === "list") body = listLayout(list, c);
     else body = table(list, c);
-    var gone = db === "reports" && (data.deleted || []).length;
+    var bin = (db === "reports" ? data.deleted : data.milestones_deleted) || [];
     return h("section", { class: "dbview" }, bar, filters, body,
       h("div", { class: "count" }, list.length + (list.length === 1 ? " row" : " rows"),
-        gone ? h("button", { class: "linkish", type: "button", onclick: function () { deletedDialog(); } },
-          "Deleted (" + data.deleted.length + ")") : null));
+        bin.length ? h("button", { class: "linkish", type: "button", onclick: function () {
+          if (db === "reports") deletedDialog(); else deletedMilestonesDialog();
+        } }, "Deleted (" + bin.length + ")") : null),
+      db === "milestones" ? (data.github_problems || []).map(function (p) {
+        return h("div", { class: "error", text: "GitHub milestone #" + p.number + " is not shown here: " + p.error + ". Fix it on GitHub." });
+      }) : null);
   }
 
   function activeFilters(c) {
@@ -683,6 +687,8 @@
     } else {
       items.push(h("button", { class: "pitem", type: "button", onclick: function () { state.menu = ""; render(); milestoneDialog(row); } },
         icon("edit"), "Open"));
+      items.push(h("button", { class: "pitem danger", type: "button",
+        onclick: function () { state.menu = ""; render(); deleteOnGitHub(row); } }, icon("cross"), "Delete"));
     }
     return h("span", { class: "acts" + (state.menu === id ? " shown" : "") },
       h("button", { class: "icon", type: "button", title: "More", "aria-label": "More", "aria-expanded": String(state.menu === id),
@@ -810,6 +816,30 @@
       }))], [h("span", { class: "grow" }), h("button", { class: "btn", type: "button", onclick: function () { close(); } }, "Close")]);
   }
 
+  // ---- milestones are deleted on GitHub only (github.py) ------------------------------------------
+
+  function deleteOnGitHub(m) {
+    var g = m.github && /^https:\/\/github\.com\//.test(m.github.url || "") ? m.github.url : "";
+    var text = !data.github ? "Milestones are deleted on GitHub, and the sync with GitHub is off on this server, so this one cannot be deleted for now."
+      : g ? "Milestones are deleted on GitHub only, so both sides stay the same. Delete it there: within a minute it moves to Deleted here, below the table, where it can be restored."
+      : "Milestones are deleted on GitHub only. This one is not on GitHub yet: wait a minute for the sync, then delete it there.";
+    var foot = [h("span", { class: "grow" }), h("button", { class: "btn", type: "button", onclick: function () { close(); } }, "Close")];
+    if (g || data.github) foot.push(h("a", { class: "btn primary", href: g || data.github, target: "_blank", rel: "noopener",
+      onclick: function () { close(); } }, "Open on GitHub"));
+    var close = dialog("Delete on GitHub", [h("p", { class: "prose" }, h("b", { text: m.title }), " " + text)], foot);
+  }
+  function deletedMilestonesDialog() {
+    var close = dialog("Deleted milestones", [h("div", { class: "hint", text: "Milestones deleted on GitHub. Restore brings one back here and creates it on GitHub again." }),
+      h("ul", { class: "evidence" }, data.milestones_deleted.map(function (m) {
+        return h("li", {}, h("span", { class: "grow", text: m.title }), h("span", { class: "when", text: m.id }),
+          h("button", { class: "btn small", type: "button", onclick: function () {
+            api("POST", "/_api/milestones/" + m.id, { deleted: false }).then(load)
+              .then(function () { close(); toast("Restored " + m.title); })
+              .catch(function (err) { toast(err.message, null, true); });
+          } }, "Restore"));
+      }))], [h("span", { class: "grow" }), h("button", { class: "btn", type: "button", onclick: function () { close(); } }, "Close")]);
+  }
+
   // ---- saving views --------------------------------------------------------------------------
 
   function saveView(id) {
@@ -894,12 +924,23 @@
     data.milestones.filter(function (m) { return includeClosed || m.status === "open" || m.id === value; }).forEach(function (m) {
       options.push(h("option", { value: m.id, selected: m.id === value, text: m.title + (m.status !== "open" ? " (" + STATUS[m.status].toLowerCase() + ")" : "") }));
     });
+    // A milestone in the bin stays linked when the report is edited; it is not offered otherwise.
+    (data.milestones_deleted || []).filter(function (m) { return m.id === value; }).forEach(function (m) {
+      options.push(h("option", { value: m.id, selected: true, text: m.title + " (deleted)" }));
+    });
     return h("select", {}, options);
   }
 
   function saveMilestone(id, body, message) {
     return api("POST", "/_api/milestones/" + id, body).then(load).then(function () { toast(message); })
       .catch(function (err) { toast(err.message, null, true); });
+  }
+
+  // The GitHub milestone it is kept in step with (github.py), if any.
+  function githubLink(m) {
+    var g = m && m.github;
+    if (!g || g.gone || !/^https:\/\/github\.com\//.test(g.url || "")) return h("span", {});
+    return h("a", { class: "hint", href: g.url, target: "_blank", rel: "noopener", text: "On GitHub #" + g.number });
   }
 
   // mode "close": the status and result first.
@@ -961,6 +1002,8 @@
             h("span", { class: "when", text: when(r.published_at, false) + ", " + person(r.author) }));
         })) : h("div", { class: "hint", text: "None yet: publish with --milestone " + m.id + ", or link a report from its row." })));
     }
+    if (!isNew && m.sync_error) body.push(h("div", { class: "error", role: "status",
+      text: "Not in step with GitHub: " + m.sync_error + ". Fix it here or on GitHub." }));
     var error = errorLine();
     body.push(error);
     var save = h("button", { class: "btn primary", type: "button", "data-label": isNew ? "Add milestone" : "Save" }, isNew ? "Add milestone" : "Save");
@@ -980,7 +1023,7 @@
       }).catch(function (err) { busy(save, false, "x"); fail(error, err); });
     });
     var close = dialog(isNew ? "New milestone" : mode === "close" ? (kind === "question" ? "Answer the question" : "Mark achieved") : "Edit milestone",
-      body, [h("span", { class: "hint", text: isNew ? "Anyone on the team can edit it later." : "Id " + m.id }), h("span", { class: "grow" }), save]);
+      body, [h("span", { class: "hint", text: isNew ? "Anyone on the team can edit it later." : "Id " + m.id }), githubLink(m), h("span", { class: "grow" }), save]);
     drawStatus();
     if (mode === "close") result.focus();
   }
