@@ -307,7 +307,20 @@ def test_the_listing_shows_the_github_link():
     m = {"id": "grasp", "title": "Grasp", "status": "open", "owner": OWNER,
          "github": {"number": 3, "url": url}}  # fmt: skip
     assert f"github: {url}" in line(m)
-    assert "github:" not in line({**m, "github": {**m["github"], "gone": True}})
+    assert "not in step with GitHub: 422" in line({**m, "sync_error": "422"})
+
+
+def test_the_listing_indents_text_over_several_lines():
+    from ontic_pages.milestones_cli import line
+
+    criteria = "> Capture a scene.\n\nWe will deliver a demo.\n"
+    m = {"id": "demo", "title": "Demo", "status": "open", "owner": OWNER,
+         "criteria": criteria, "next": "Glove"}  # fmt: skip
+    assert line(m).split("\n")[3:] == [
+        "    done when: > Capture a scene.",
+        "      We will deliver a demo.",
+        "    next: Glove",
+    ]
 
 
 def test_the_overview_has_the_bin_and_the_github_link(store, serve):

@@ -17,6 +17,13 @@ from .store import PILLARS
 MARK = {"open": " ", "achieved": "+", "answered": "+", "dropped": "-"}
 
 
+def field(label: str, value: str) -> str:
+    """A labelled value; its further lines indented under the first, blank lines left out (a
+    blank line separates milestones)."""
+    first, *rest = [part for part in value.strip().split("\n") if part.strip()] or [""]
+    return "\n".join([f"    {label}: {first}"] + [f"      {part}" for part in rest])
+
+
 def line(m: dict) -> str:
     kind = "question" if m.get("kind") == "question" else "capability"
     status = m.get("status", "open")
@@ -30,18 +37,19 @@ def line(m: dict) -> str:
         f"owner {m.get('owner', '')}{target}",
     ]
     if m.get("criteria"):
-        out.append(f"    done when: {m['criteria']}")
+        out.append(field("done when", m["criteria"]))
     if m.get("status") == "open" and m.get("next"):
-        out.append(f"    next: {m['next']}")
+        out.append(field("next", m["next"]))
     if m.get("result"):
-        out.append(f"    result: {m['result']}")
+        out.append(field("result", m["result"]))
     if m.get("evidence"):
         out.append(f"    evidence: {m['evidence']}")
     if m.get("closed_at"):
         out.append(f"    closed {stamp(m['closed_at'])}")
-    github = m.get("github") or {}
-    if github.get("url") and not github.get("gone"):
-        out.append(f"    github: {github['url']}")
+    if (m.get("github") or {}).get("url"):
+        out.append(f"    github: {m['github']['url']}")
+    if m.get("sync_error"):
+        out.append(field("not in step with GitHub", m["sync_error"]))
     return "\n".join(out)
 
 
