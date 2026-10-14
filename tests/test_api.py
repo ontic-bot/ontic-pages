@@ -10,7 +10,7 @@ from helpers import SECRET, request
 
 from ontic_pages.publish import publish
 from ontic_pages.tokens import sign
-from ontic_pages.uploads import MAX_FILES
+from ontic_pages.uploads import MAX_BYTES, MAX_FILES
 
 T1 = datetime(2026, 10, 7, 15, 30, tzinfo=UTC)
 OWNER = "owner@onticlabs.io"
@@ -300,9 +300,9 @@ def test_publish_limits_and_batches(local, store, monkeypatch):
     too_many = files_of(*((f"{i}", 0) for i in range(MAX_FILES + 1)))
     monkeypatch.setattr("ontic_pages.gateway.LIST_BODY", 10**7)  # past Caddy, to reach the count
     assert call(srv, "/_api/pages/fresh/versions", OWNER, {"files": too_many})[0] == 413
-    huge = files_of(("a.bin", 4 * 1024**3), ("b.bin", 2 * 1024**3))
+    huge = files_of(("a.bin", MAX_BYTES - 1), ("b.bin", 2))
     status, answer = call(srv, "/_api/pages/fresh/versions", OWNER, {"files": huge})
-    assert status == 413 and "5 GB" in answer["error"]
+    assert status == 413 and "20 GB" in answer["error"]
     # More of the list in a second request; the same limits count across both.
     _, answer = call(srv, "/_api/pages/fresh/versions", OWNER, {"files": files_of(("a", 1))})
     more = f"/_api/pages/fresh/versions/{answer['version']}/files"
@@ -310,7 +310,7 @@ def test_publish_limits_and_batches(local, store, monkeypatch):
     assert status == 200 and [u["path"] for u in extra["uploads"]] == ["b"]
     assert call(srv, more, OWNER, {"files": files_of(("a", 1))})[0] == 400  # sent already
     assert call(srv, more, OTHER, {"files": files_of(("c", 1))})[0] == 404  # not theirs
-    assert call(srv, more, OWNER, {"files": files_of(("c", 5 * 1024**3))})[0] == 413
+    assert call(srv, more, OWNER, {"files": files_of(("c", MAX_BYTES))})[0] == 413
 
 
 def test_commit_checks_sizes(local, store, s3):

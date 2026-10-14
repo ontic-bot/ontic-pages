@@ -38,8 +38,8 @@ from .publish import (
 )
 from .store import Store, check_pillar, check_tags, check_visibility
 
-MAX_FILES = 5000
-MAX_BYTES = 5 * 1024**3
+MAX_FILES = 20_000
+MAX_BYTES = 20 * 1024**3
 MAX_PENDING = 100
 URL_SECONDS = 3600
 PENDING_SECONDS = 2 * 3600

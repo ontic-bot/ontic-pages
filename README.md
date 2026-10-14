@@ -159,7 +159,7 @@ minute), these commands wait and try again.
 
 Anyone with an `@onticlabs.io` account may create a page; only its owner (the publisher of the
 current version) may publish a new version of it, `share` it or `set-current`. A publish uploads
-up to 8 files at a time (each retried twice), at most 5000 files and 5 GB per version; nothing
+up to 8 files at a time (each retried twice), at most 20,000 files and 20 GB per version; nothing
 becomes visible until every file is in the bucket with the size announced.
 
 `pull` writes every file of a version but `page.json` into a new or empty folder (default
