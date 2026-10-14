@@ -387,6 +387,12 @@ page.json and version ids stay in UTC.
   for video, ETags and 304s), `/_v/<version>/<path>` a given version, cached for a
   year. Opened directly in a browser it redirects to the bar; `?raw=1` opens it
   without the bar.
+  With direct files on (`ONTIC_PAGES_DIRECT_FILES=1` on the gateway), every file but HTML
+  is answered with a 302 to a presigned bucket URL after the same access check, so its bytes go
+  from the bucket to the browser and never through the gateway; HTML stays on the gateway (the
+  bar's bridge and the frame policy). The URL for a file is the same for 50 minutes (valid for an
+  hour), so the browser's cache works. It needs the bucket's CORS rule for the page hosts
+  (`deploy/README.md`, "Direct files").
 
 The bar: the home link, the title menu (who published, when, the description, the
 versions, Copy link, Open without the bar, Details, All pages), an "old version"

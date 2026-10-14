@@ -12,6 +12,9 @@ Read from ~/.config/ontic-pages/config.toml, then overridden by environment vari
                                              served from <name>.<content_suffix>)
     email             ONTIC_PAGES_EMAIL      (who you are; default: git user.email, else $USER)
     direct            ONTIC_PAGES_DIRECT     (1: use your own bucket key, not the gateway)
+    direct_files      ONTIC_PAGES_DIRECT_FILES  (the gateway only, 1: answer a page's files other
+                                             than HTML with a redirect to a presigned bucket URL,
+                                             so their bytes go from the bucket to the browser)
     access_key_id     AWS_ACCESS_KEY_ID
     secret_access_key AWS_SECRET_ACCESS_KEY
     token_secret      ONTIC_PAGES_TOKEN_SECRET  (the gateway only: signs the command line's tokens)
@@ -48,6 +51,7 @@ ENV = {
     "content_suffix": "ONTIC_PAGES_CONTENT_SUFFIX",
     "email": "ONTIC_PAGES_EMAIL",
     "direct": "ONTIC_PAGES_DIRECT",
+    "direct_files": "ONTIC_PAGES_DIRECT_FILES",
     "access_key_id": "AWS_ACCESS_KEY_ID",
     "secret_access_key": "AWS_SECRET_ACCESS_KEY",
     "token_secret": "ONTIC_PAGES_TOKEN_SECRET",
@@ -67,6 +71,7 @@ class Config:
     content_suffix: str = ""
     email: str | None = None
     direct: str = ""
+    direct_files: str = ""
     access_key_id: str | None = None
     secret_access_key: str | None = None
     token_secret: str = ""
@@ -77,6 +82,10 @@ class Config:
     @property
     def is_direct(self) -> bool:
         return self.direct.strip().lower() in ("1", "true", "yes")
+
+    @property
+    def is_direct_files(self) -> bool:
+        return self.direct_files.strip().lower() in ("1", "true", "yes")
 
     def page_url(self, name: str) -> str:
         return f"{self.url.rstrip('/')}/{name}/"

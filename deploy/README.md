@@ -136,6 +136,43 @@ itself, the shell and the page's files alike, and before every answer (304s too)
   answers `/_tls-ask` with 404 on both public sites; the gateway answers it only for
   a Host that is neither the apex nor a page host.
 
+## Direct files (optional, off until `ONTIC_PAGES_DIRECT_FILES=1`)
+
+With it on, the gateway checks who may open the page as before, then answers every file but HTML
+with a 302 to a presigned GET URL on the bucket: images, video, scripts, JSON and 3D files go from
+B2 to the browser, not through this box. HTML is still served here (the bar's bridge is added to it
+and it carries the frame policy). Turning it on:
+
+1. **CORS on the bucket**, once, with a B2 key that may change buckets (the account key, not the
+   gateway's). Files a page loads with `fetch()`, module scripts, fonts and images drawn into a
+   canvas need it; plain `<img>`, `<video>` and `<script>` work without it. `--cors-rules`
+   replaces every rule, so the overview's upload rule is listed again:
+
+   ```sh
+   b2 bucket update --cors-rules '[
+     {"corsRuleName": "overview-uploads",
+      "allowedOrigins": ["https://pages.onticlabs.io"], "allowedOperations": ["s3_put"],
+      "allowedHeaders": ["content-type"], "exposeHeaders": ["etag"], "maxAgeSeconds": 3600},
+     {"corsRuleName": "page-files",
+      "allowedOrigins": ["https://*.pages.onticlabs.io"], "allowedOperations": ["s3_get", "s3_head"],
+      "allowedHeaders": ["range"], "exposeHeaders": ["content-length", "content-range", "etag"],
+      "maxAgeSeconds": 3600}]' ontic-pages
+   b2 bucket get ontic-pages   # check: both rules listed
+   ```
+
+2. **`ONTIC_PAGES_DIRECT_FILES=1`** in `deploy/secrets.env`, then `deploy/deploy.sh ontic-vps`.
+   No new key: the gateway's key already reads files (`readFiles`, the same capability `pull`
+   uses for its presigned URLs).
+
+3. **Check** on a page with an image and a JSON file: in the browser's network panel the file
+   request is a 302 to `s3.eu-central-003.backblazeb2.com` and then a 200 from there; the box's
+   log shows `302` for those paths.
+
+What it changes for access: a presigned URL works for whoever holds it until it expires (at most an
+hour, at least 10 minutes when handed out). Someone who can open a private page can copy a file URL
+out of it and share it for that long; the page itself (HTML) is still checked on every request.
+Turning it off is `ONTIC_PAGES_DIRECT_FILES=` and a deploy; the CORS rule can stay.
+
 ## What changed with the research overview
 
 - **One-time: a CORS rule on the bucket**, so the overview's composer can PUT images and videos

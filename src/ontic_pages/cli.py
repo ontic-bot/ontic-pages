@@ -343,6 +343,7 @@ def cmd_gateway(args) -> None:
         token_secret=cfg.token_secret,
         github=gateway.GitHub(cfg.github_token, cfg.github_repo) if cfg.github_token else None,
         github_owner=cfg.github_owner,
+        direct_files=cfg.is_direct_files,
     )  # fmt: skip
 
 

@@ -32,7 +32,8 @@ See README.md for what it does and deploy/README.md for how it is hosted.
   A Bearer token (tokens.py) is the other identity; it is refused with any Origin or
   Sec-Fetch-Site (browsers never hold tokens).
 - `src/ontic_pages/cache.py`: the in-memory caches (version files and file lists, page state);
-  a saved edit seeds them with what it wrote.
+  a saved edit seeds them with what it wrote. `DirectLinks`: the presigned GET URLs handed out
+  with direct files on (the same URL for a file for 50 minutes).
 - `src/ontic_pages/comments.py`: comments, one `<name>/comments.json` per page written only by the
   gateway (read-modify-write under a lock per page, cached a few seconds); cleaning of comment
   text and anchors; deleted comments stay as tombstones.
@@ -93,7 +94,7 @@ See README.md for what it does and deploy/README.md for how it is hosted.
 - The tool never deletes anything from the bucket. Deleting a page sets `deleted` in its
   `labels.json`: hidden everywhere, 404 at its address, restorable.
 - File bytes never pass through the gateway (Caddy caps bodies at 64 KB on purpose): they go to
-  presigned URLs. Only the gateway holds a bucket key in normal use.
+  presigned URLs. With direct files on, the same holds for reading a page's files, HTML aside. Only the gateway holds a bucket key in normal use.
 - Add or update a test for every behavior change; when you use a new boto3 call, add it to the fake.
 - Never commit `deploy/secrets.env` or any credential.
 - Never use em dashes in any text.

@@ -4,6 +4,9 @@ A version never changes once written, so its files are kept (least recently used
 (name, version, path), and so is the list of its files. Only `current`, `visibility`, the list
 of versions and labels.json can change; they are kept for a few seconds. A saved edit (edits.py)
 puts what it wrote straight in, so the new version costs no read.
+
+With direct files on (gateway.py), DirectLinks keeps the presigned GET URL of each file it has
+handed out, so a browser asking again gets the same URL and can use its own cache.
 """
 
 from __future__ import annotations
@@ -249,3 +252,36 @@ class LabelCache:
     def forget(self, name: str) -> None:
         with self.lock:
             self.entries.pop(name, None)
+
+
+class DirectLinks:
+    """Presigned GET URLs for files a browser fetches from the bucket itself (direct files).
+
+    A URL is valid for LINK_SECONDS and handed out again until REUSE_SECONDS have passed, so the
+    same file keeps the same URL for a while (the browser's cache works) and every URL handed out
+    has at least LINK_SECONDS - REUSE_SECONDS left. Least recently used out first past MAX_LINKS."""
+
+    LINK_SECONDS = 3600
+    REUSE_SECONDS = 3000
+    MAX_LINKS = 100_000
+
+    def __init__(self, store: Store, clock=time.monotonic):
+        self.store, self.clock = store, clock
+        self.lock = threading.Lock()
+        self.links: OrderedDict[str, tuple[float, str]] = OrderedDict()
+
+    def url(self, key: str) -> tuple[str, int]:
+        """(URL, seconds it stays valid at least) for the bucket key."""
+        now = self.clock()
+        with self.lock:
+            hit = self.links.get(key)
+            if hit and now - hit[0] < self.REUSE_SECONDS:
+                self.links.move_to_end(key)
+                return hit[1], int(self.LINK_SECONDS - (now - hit[0]))
+        url = self.store.presign_get(key, self.LINK_SECONDS)
+        with self.lock:
+            self.links[key] = (now, url)
+            self.links.move_to_end(key)
+            while len(self.links) > self.MAX_LINKS:
+                self.links.popitem(last=False)
+        return url, self.LINK_SECONDS

@@ -43,6 +43,9 @@ On a page's own host, <name>.<content suffix> (the content host):
 
     GET  /<path>                        the current version's file, index.html for folders
     GET  /_v/<version>/<path>           a given version's file
+                                        With direct files on (ONTIC_PAGES_DIRECT_FILES), a file
+                                        other than HTML is a 302 to a presigned bucket URL after
+                                        the same access check: its bytes skip the gateway.
     GET  /_bridge.<hash>.js             the bridge, added to HTML shown in the shell's frame
 
     A browser opening a content URL as a page of its own (Sec-Fetch-Dest: document) is sent to
@@ -78,7 +81,7 @@ from .auth import (
     allowed,
     fixed,
 )
-from .cache import MB, FileCache, LabelCache, PageCache
+from .cache import MB, DirectLinks, FileCache, LabelCache, PageCache
 from .comments import Comments, listing
 from .comments import view as thread_view
 from .config import DEFAULT_URL
@@ -213,9 +216,11 @@ class Gateway:
         cache_bytes: int = 256 * MB,
         file_bytes: int = 4 * MB,
         token_secret: str = "",
+        direct_files: bool = False,
     ):
         self.store, self.site, self.identity = store, site, identity
         self.files = FileCache(store, cache_bytes, file_bytes)
+        self.direct = DirectLinks(store) if direct_files else None  # see send_content
         self.pages = PageCache(store, self.files, ttl)
         self.assets = Assets(site.origin)
         self.limit = RateLimit()
@@ -1211,6 +1216,17 @@ def make_handler(gw: Gateway):
                 "Content-Security-Policy": f"frame-ancestors 'self' {site.origin}",
             }
             key = gw.store.key(name, version, rest)
+            if gw.direct and not headers["Content-Type"].startswith("text/html"):
+                # Direct files: the browser fetches the bytes from the bucket (Range included).
+                # HTML stays here (the bar's bridge, the frame policy). The version's file list
+                # says whether the file exists; anything else falls through to the 404 below.
+                if rest in gw.files.listing(name, version):
+                    url, left = gw.direct.url(key)
+                    return self.send_body(
+                        302,
+                        b"",
+                        {"Location": url, "Cache-Control": f"private, max-age={max(0, left - 60)}"},
+                    )
             if self.headers.get("Range"):
                 try:
                     obj = gw.store.get(key, self.headers.get("Range"))
@@ -1295,14 +1311,18 @@ def make_server(
     token_secret: str = "",
     github: GitHub | None = None,
     github_owner: str = "",
+    direct_files: bool = False,
 ) -> ThreadingHTTPServer:
     """identity: who sent a Cookie header; default: --local-as, else oauth2-proxy at auth_url.
     token_secret: signs the command line's tokens; without it their routes answer 503.
     github: the repository whose milestones are kept in step with these (github.py), in a
-    thread started here; github_owner owns the ones made there."""
+    thread started here; github_owner owns the ones made there.
+    direct_files: answer files other than HTML with a redirect to a presigned bucket URL."""
     if identity is None:
         identity = fixed(local_email) if local_email else OAuth2Proxy(auth_url, ttl=ttl)
-    gw = Gateway(store, site or Site(), identity, ttl, cache_bytes, file_bytes, token_secret)
+    gw = Gateway(
+        store, site or Site(), identity, ttl, cache_bytes, file_bytes, token_secret, direct_files
+    )
     if github:
         origin = gw.site.origin
         gw.sync = Sync(gw.milestones, github, github_owner, lambda name: f"{origin}/{name}/")
