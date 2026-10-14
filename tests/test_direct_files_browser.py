@@ -69,17 +69,25 @@ def browser_site(store, tmp_path, monkeypatch):
         store,
         "127.0.0.1",
         port,
-        site=Site(f"http://localhost:{port}"),
+        site=Site(f"http://pages.test:{port}"),
         identity=cookie_identity,
         ttl=0,
         direct_files=True,
     )
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    origin = f"http://demo.localhost:{port}"
+    origin = f"http://demo.pages.test:{port}"
     bucket.origins.add(origin)
     with playwright.sync_playwright() as pw:
         browser = pw.chromium.launch(
-            executable_path=CHROMIUM, args=["--no-sandbox", "--disable-gpu"]
+            executable_path=CHROMIUM,
+            args=[
+                "--no-sandbox",
+                "--disable-gpu",
+                "--no-proxy-server",
+                "--host-resolver-rules=MAP pages.test 127.0.0.1, MAP *.pages.test 127.0.0.1",
+                # Production is HTTPS: enable Fetch Metadata on these local HTTP fixtures.
+                f"--unsafely-treat-insecure-origin-as-secure={origin},http://pages.test:{port}",
+            ],
         )
         context = browser.new_context()
         context.add_cookies([{"name": "who", "value": OWNER, "url": origin}])
@@ -205,3 +213,59 @@ def test_markdown_media_uses_direct_delivery_without_publisher_options(browser_s
     page.wait_for_function("document.querySelector('video').readyState >= 1")
     assert any(path.endswith("/dot.png") and code == 200 for _, path, code, _ in bucket.requests)
     assert any(path.endswith("/seek.webm") and code == 206 for _, path, code, _ in bucket.requests)
+
+
+def test_json_custom_headers_follow_redirect_preflight(browser_site):
+    page, origin, bucket, _ = browser_site
+    page.goto(origin + "/?raw=1")
+    # Match jQuery's same-origin XHR header without a third-party CDN dependency.
+    read = """async () => {
+        const xhr = await new Promise((resolve, reject) => {
+            const x = new XMLHttpRequest(); x.open('GET', './data.json');
+            x.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
+            x.onload = () => resolve(JSON.parse(x.responseText)); x.onerror = reject; x.send();
+        });
+        const data = await (await fetch('./data.json', {
+            headers: {'Content-Type': 'application/json'}
+        })).json();
+        return [xhr, data];
+    }"""
+    assert page.evaluate(read) == [{"version": 1}, {"version": 1}]
+    assert any(path.endswith("/data.json") for _, path, _, _ in bucket.requests)
+
+
+@pytest.mark.parametrize("visibility", ["public", "ontic", "private"])
+@pytest.mark.parametrize("legacy", [True, False])
+def test_composer_preview_existing_and_dropped_media(browser_site, store, visibility, legacy):
+    page, origin, bucket, root = browser_site
+    source = root / "note.md"
+    source.write_text("# Preview\n\n![existing](dot.png)\n\n![clip](seek.webm)")
+    publish(store, source, "demo", published_by=OWNER, now=T2)
+    store.set_visibility("demo", visibility)
+    if legacy:
+        store.set_labels("demo", {})
+    apex = origin.replace("demo.pages.test", "pages.test")
+    page.context.add_cookies([{"name": "who", "value": OWNER, "url": apex}])
+    page.goto(apex)
+    page.locator("tr.r").first.hover()
+    page.get_by_role("button", name="More", exact=True).first.click()
+    page.get_by_role("button", name="Edit the update", exact=True).click()
+    with page.expect_file_chooser() as chooser:
+        page.get_by_role("button", name="Attach", exact=True).click()
+    chooser.value.set_files([str(root / "dot.png"), str(root / "seek.webm")])
+    page.get_by_role("tab", name="Preview", exact=True).click()
+    frame = page.frame_locator('iframe[title="Preview"]')
+    for index in range(2):
+        frame.locator("img").nth(index).scroll_into_view_if_needed()
+        frame.locator("img").nth(index).evaluate("i => i.decode()")
+    page.wait_for_function("""() => {
+        const d=document.querySelector('iframe[title="Preview"]').contentDocument;
+        const videos=[...d.querySelectorAll('video')];
+        return videos.length===2 && videos.every(v=>v.readyState>=1);
+    }""")
+    assert frame.locator("[crossorigin]").count() == 0
+    assert frame.locator('img[src^="blob:"]').count() == 1
+    assert frame.locator('video[src^="blob:"]').count() == 1
+    # The real composer previews new files from blob URLs and existing media via the
+    # authenticated page host. Neither needs a bucket download or apex download CORS.
+    assert bucket.requests == []

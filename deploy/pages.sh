@@ -64,6 +64,14 @@ check_box() {
     echo "ok    podman, systemctl, caddy; Caddyfile imports conf.d, asks /_tls-ask and validates"
 }
 
+check_download_cors() {
+    setting=$(val ONTIC_PAGES_DIRECT_FILES | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+    case "$setting" in ""|1|true|yes) ;; *) return ;; esac
+    command -v python3 >/dev/null || die "python3 is required for the live download CORS check"
+    python3 "$HERE/check-cors.py" "$(val ONTIC_PAGES_ENDPOINT)" "$(val ONTIC_PAGES_BUCKET)" \
+        || die "download CORS is not ready; services were not changed"
+}
+
 write_etc() {
     umask 077
     mkdir -p "$ETC"
@@ -83,13 +91,12 @@ do_install() {
     [ "$(id -u)" = 0 ] || die "install must run as root"
     check_secrets
     check_box
+    check_download_cors
     write_etc
     podman build -t "$IMAGE" --build-arg "REVISION=$(git -C "$CHECKOUT" rev-parse --short HEAD)" \
         --ignorefile "$HERE/Dockerfile.dockerignore" -f "$HERE/Dockerfile" "$CHECKOUT"
     for u in $UNITS; do install -m 0644 "$HERE/$u" "$QUADLET/$u"; done
     systemctl daemon-reload
-    systemctl restart pages-network.service pages-gateway.service pages-oauth2-proxy.service
-    echo "ok    units started"
     backup=$(mktemp)
     [ -f "$SITE" ] && cp "$SITE" "$backup"
     install -m 0640 -o root -g caddy "$HERE/pages.caddy" "$SITE"
@@ -100,11 +107,14 @@ do_install() {
     fi
     rm -f "$backup"
     systemctl reload caddy
+    # Install log redaction before the new gateway can issue signed redirects.
+    systemctl restart pages-network.service pages-gateway.service pages-oauth2-proxy.service
+    echo "ok    units started"
     echo "ok    caddy reloaded; https://pages.onticlabs.io/ should redirect to Google sign-in"
 }
 
 case $MODE in
-check) check_secrets; check_box; echo "check passed; run: $0 install" ;;
+check) check_secrets; check_box; check_download_cors; echo "check passed; run: $0 install" ;;
 install) do_install ;;
 status)
     for u in pages-network pages-oauth2-proxy pages-gateway; do

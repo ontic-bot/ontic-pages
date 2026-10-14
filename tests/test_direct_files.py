@@ -302,3 +302,20 @@ def test_server_default_automatically_distinguishes_new_and_legacy(store, site):
         assert content(server, "legacy", "/data.json")[0] == 200
     finally:
         stop(server)
+
+
+def test_media_gets_full_hour_even_when_other_links_are_aged(serve, store, site, bucket):
+    (site / "clip.mp4").write_bytes(b"video")
+    (site / "sound.mp3").write_bytes(b"audio")
+    publish(store, site, "report", now=T1)
+    server = serve(direct_files=True)
+    for path in ("clip.mp4", "sound.mp3"):
+        bucket.now = 0
+        first = content(server, "report", "/" + path, headers=CORS)[1]["Location"]
+        bucket.now = 2999
+        fresh = content(server, "report", "/" + path, headers=CORS)[1]["Location"]
+        assert fresh != first
+        bucket.now = 3601
+        assert fetch(first)[0] == 403 and fetch(fresh)[0] == 200
+        bucket.now = 6599
+        assert fetch(fresh)[0] == 403

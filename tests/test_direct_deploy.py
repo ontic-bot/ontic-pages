@@ -26,6 +26,7 @@ def test_install_propagates_enable_and_rollback(tmp_path):
     binary.mkdir()
     stubs = {
         "id": "echo 0",
+        "python3": 'echo "cors-probe $*" >> "$TEST_COMMANDS"; exit "${TEST_CORS_STATUS:-0}"',
         "git": "echo review-test",
         "chown": "exit 0",
         "podman": 'echo "podman $*" >> "$TEST_COMMANDS"',
@@ -53,7 +54,12 @@ def test_install_propagates_enable_and_rollback(tmp_path):
             + f"ONTIC_PAGES_DIRECT_FILES={setting}\n"
         )
         secrets.chmod(0o600)
-        subprocess.run(["sh", str(script), "install"], env=env, check=True, capture_output=True)
+        subprocess.run(
+            ["sh", str(script), "install"],
+            env={**env, "TEST_CORS_STATUS": "0" if enabled else "1"},
+            check=True,
+            capture_output=True,
+        )
         gateway_env = dict(
             line.split("=", 1)
             for line in (etc / "ontic-pages/gateway.env").read_text().splitlines()
@@ -62,7 +68,22 @@ def test_install_propagates_enable_and_rollback(tmp_path):
         assert gateway_env["ONTIC_PAGES_TOKEN_SECRET"] == "x" * 32
         assert "GOOGLE_CLIENT_SECRET" not in gateway_env
         assert (etc / "ontic-pages/gateway.env").stat().st_mode & 0o777 == 0o600
+    # A missing CORS rule must stop both check and install before writes/build/restarts.
+    before = commands.read_text()
+    (etc / "ontic-pages/gateway.env").write_text("unchanged\n")
+    for mode in ("check", "install"):
+        result = subprocess.run(
+            ["sh", str(script), mode],
+            env={**env, "TEST_CORS_STATUS": "1"},
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode != 0
+        assert "services were not changed" in result.stderr
+        assert (etc / "ontic-pages/gateway.env").read_text() == "unchanged\n"
     log = commands.read_text()
+    assert log.count("cors-probe") == 4  # enabled, empty, and both rejected attempts
+    assert log.count("podman build") == before.count("podman build")
     assert log.count("podman build") == 3
     assert (
         log.count(
@@ -72,3 +93,33 @@ def test_install_propagates_enable_and_rollback(tmp_path):
         == 3
     )
     assert log.count("systemctl reload caddy") == 3
+    assert log.index("systemctl reload caddy") < log.index("systemctl restart")
+
+
+def test_live_cors_probe_accepts_wildcard_and_rejects_range_only(store, monkeypatch):
+    import importlib.util
+
+    from direct_bucket import DirectBucket
+
+    path = Path(__file__).resolve().parents[1] / "deploy/check-cors.py"
+    spec = importlib.util.spec_from_file_location("check_cors", path)
+    probe = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(probe)
+    bucket = DirectBucket(store, monkeypatch)
+    bucket.origins.add(probe.ORIGIN)
+    try:
+        probe.check(bucket.origin, store.bucket)
+        bucket.allowed_headers = {"range", "content-type", "x-requested-with"}
+        probe.check(bucket.origin, store.bucket)
+        bucket.allowed_headers = {"range"}
+        from urllib.error import HTTPError
+
+        import pytest
+
+        with pytest.raises(HTTPError):
+            probe.check(bucket.origin, store.bucket)
+        bucket.origins.clear()
+        with pytest.raises(HTTPError):
+            probe.check(bucket.origin, store.bucket)
+    finally:
+        bucket.close()

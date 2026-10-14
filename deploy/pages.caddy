@@ -62,6 +62,12 @@ pages.onticlabs.io {
 
 	log {
 		output stderr
+		# Signed download URLs are bearer credentials; never log redirect targets.
+		format filter {
+			fields {
+				resp_headers>Location delete
+			}
+		}
 	}
 }
 
@@ -92,5 +98,11 @@ pages.onticlabs.io {
 
 	log {
 		output stderr
+		# Signed download URLs are bearer credentials; never log redirect targets.
+		format filter {
+			fields {
+				resp_headers>Location delete
+			}
+		}
 	}
 }

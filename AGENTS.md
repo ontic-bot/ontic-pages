@@ -33,7 +33,7 @@ See README.md for what it does and deploy/README.md for how it is hosted.
   Sec-Fetch-Site (browsers never hold tokens).
 - `src/ontic_pages/cache.py`: the in-memory caches (version files and file lists, page state);
   a saved edit seeds them with what it wrote. `DirectLinks`: the presigned GET URLs handed out
-  with direct files on (the same URL for a file for 50 minutes).
+  with direct files on (reuse non-media URLs for 50 minutes; freshly sign audio/video).
 - `src/ontic_pages/comments.py`: comments, one `<name>/comments.json` per page written only by the
   gateway (read-modify-write under a lock per page, cached a few seconds); cleaning of comment
   text and anchors; deleted comments stay as tombstones.

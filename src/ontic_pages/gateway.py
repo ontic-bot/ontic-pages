@@ -1089,7 +1089,9 @@ def make_handler(gw: Gateway):
             text, title = data.get("markdown"), data.get("title") or ""
             if not isinstance(text, str) or not isinstance(title, str):
                 raise Refused(400, "send {markdown, title}")
-            self.send_json(200, {"html": page_html(title, render(text, title), "Preview")})
+            self.send_json(
+                200, {"html": page_html(title, render(text, title, media_cors=False), "Preview")}
+            )
 
         def relabel(self, name: str, data):
             """Anyone on the team who may open the page changes its pillar, tags, milestone or
@@ -1277,7 +1279,9 @@ def make_handler(gw: Gateway):
                 # Recheck access and current on every gateway request. Only the bucket URL is
                 # reused: caching this redirect would pin unversioned paths to an old version.
                 if rest in gw.files.listing(name, version):
-                    url, _ = gw.direct.url(key)
+                    url, _ = gw.direct.url(
+                        key, fresh=headers["Content-Type"].startswith(("audio/", "video/"))
+                    )
                     return self.send_body(
                         302,
                         b"",

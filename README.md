@@ -406,7 +406,8 @@ page.json and version ids stay in UTC.
   For data that requires the original origin, use `fetch(url, {mode: "same-origin"})`.
   A GLB using external resources must resolve them against its original gateway URL.
 
-  Signed links last one hour and are reused for up to 50 minutes. Gateway redirects are
+  Signed links last one hour. Audio/video requests get freshly signed links; other files
+  reuse links for up to 50 minutes. Gateway redirects are
   `private, no-store`, so a fresh file request checks access and the current version again.
   Reloading after expiry renews links for an authorized viewer. A tab holding an old bucket
   URL can fail on a later seek/download; reload the page or request its original gateway URL.

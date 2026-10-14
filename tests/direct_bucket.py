@@ -32,6 +32,7 @@ class DirectBucket:
         self.grants = {}
         self.requests = []
         self.origins = set()
+        self.allowed_headers = {"*"}
         bucket = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -46,18 +47,25 @@ class DirectBucket:
                 allowed = (
                     self.headers.get("Origin") in bucket.origins
                     and self.headers.get("Access-Control-Request-Method") in ("GET", "HEAD")
-                    and set(
-                        h.strip().lower()
-                        for h in self.headers.get("Access-Control-Request-Headers", "").split(",")
-                        if h.strip()
+                    and (
+                        "*" in bucket.allowed_headers
+                        or set(
+                            h.strip().lower()
+                            for h in self.headers.get("Access-Control-Request-Headers", "").split(
+                                ","
+                            )
+                            if h.strip()
+                        )
+                        <= bucket.allowed_headers
                     )
-                    <= {"range"}
                 )
                 self.send_response(204 if allowed else 403)
                 if allowed:
                     self.cors()
                     self.send_header("Access-Control-Allow-Methods", "GET, HEAD")
-                    self.send_header("Access-Control-Allow-Headers", "range")
+                    self.send_header(
+                        "Access-Control-Allow-Headers", ", ".join(bucket.allowed_headers)
+                    )
                 self.end_headers()
 
             def do_GET(self):

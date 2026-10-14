@@ -126,3 +126,12 @@ def test_nasty_inputs_are_quick(source):
 def test_external_media_keeps_its_request_mode():
     out = render("![external](https://example.com/a.png) ![v](//example.com/a.mp4)")
     assert "crossorigin=" not in out
+
+
+def test_preview_media_preserves_credentials_and_needs_no_bucket_cors():
+    source = "![plot](media/plot.png) ![clip](media/clip.mp4)"
+    preview = render(source, media_cors=False)
+    assert "<img" in preview and "<video" in preview
+    assert "crossorigin" not in preview
+    # Per-render options cannot leak between concurrent preview and publish calls.
+    assert render(source).count('crossorigin="anonymous"') == 2

@@ -1148,9 +1148,14 @@
         var page = answer.html;
         files.forEach(function (f) { page = page.split('"' + f.path + '"').join('"' + f.url + '"'); });
         if (editing && data.content_origin) {
-          // Media of the version being edited come from the page's own host.
-          var base = data.content_origin.replace("__name__", source.name);
-          page = page.replace("<head>", '<head><base href="' + base + '/">');
+          // srcdoc inherits the overview's CSP, which forbids <base>. Resolve media
+          // explicitly; blob URLs for newly attached files stay unchanged.
+          var base = data.content_origin.replace("__name__", source.name) + "/";
+          var doc = new DOMParser().parseFromString(page, "text/html");
+          doc.querySelectorAll("img[src], video[src]").forEach(function (media) {
+            media.setAttribute("src", new URL(media.getAttribute("src"), base).href);
+          });
+          page = "<!doctype html>" + doc.documentElement.outerHTML;
         }
         frame.srcdoc = page;
       }).catch(function (err) { fail(error, err); });

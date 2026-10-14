@@ -145,7 +145,12 @@ publisher action is required. Use the updated gateway for normal publishing; leg
 publishing with their own bucket key (`--direct`) must be upgraded to persist this setting.
 
 The gateway permits direct delivery by default (`ONTIC_PAGES_DIRECT_FILES=1`). Before deploying,
-configure bucket CORS. Eligible CORS-mode GETs for data/media are redirected after authorization;
+configure bucket CORS. Both `check` and `install` probe live GET/HEAD preflights with Range,
+Content-Type and X-Requested-With before writing runtime configuration or restarting services. No admin
+credentials are needed for this probe. Deployment refuses to proceed when direct delivery is
+enabled but CORS is missing, incomplete or unreachable; explicit `0` permits server-only rollback.
+
+Eligible CORS-mode GETs for data/media are redirected after authorization;
 HTML, CSS, scripts/workers, playlists, SVG/XML, glTF JSON, HEAD and browser no-cors/same-origin requests stay
 on the gateway. The bucket remains private. New pages should use `crossorigin="anonymous"` for
 images/video; `fetch()` already defaults to CORS. See the compatibility details in README.md.
@@ -164,7 +169,7 @@ images/video; `fetch()` already defaults to CORS. See the compatibility details 
    jq '[{"corsRuleName": "page-files",
          "allowedOrigins": ["https://*.pages.onticlabs.io"],
          "allowedOperations": ["s3_get", "s3_head"],
-         "allowedHeaders": ["range"],
+         "allowedHeaders": ["*"],
          "exposeHeaders": ["content-length", "content-range", "etag"],
          "maxAgeSeconds": 3600}]
        + [.[] | select(.corsRuleName != "page-files")]' \
@@ -197,7 +202,8 @@ images/video; `fetch()` already defaults to CORS. See the compatibility details 
    ```
 
    `deploy.sh` copies the complete secrets file, builds the image and restarts the services.
-   The gateway's existing `readFiles` key signs downloads; no additional runtime privilege,
+   The box needs `python3` for the credential-free CORS probe. The gateway's existing `readFiles`
+   key signs downloads; no additional runtime privilege,
    DNS record or OAuth change is required. The existing root deployment handles the environment
    file, container rebuild and Caddy validation/reload. Verify the running image revision
    (inspect the container image ID, then its `org.opencontainers.image.revision` label) and inspect
@@ -214,6 +220,8 @@ images/video; `fetch()` already defaults to CORS. See the compatibility details 
      `Cache-Control: private, no-store`. Confirm bucket Content-Type and CORS headers.
    - Video seeks return the expected `206` and `Content-Range`; test a Range preflight too.
      Inspect `Origin` and `Access-Control-Allow-Origin` for the actual page subdomain.
+     Test a jQuery-style JSON request with `X-Requested-With: XMLHttpRequest` and a fetch with
+     `Content-Type: application/json`; both must pass the B2 preflight and load JSON.
    - Nested modules, CSS images/fonts and workers load; CORS-enabled images work in canvas/WebGL.
      Publish another version with changed JSON/media and verify a populated browser cache sees it.
    - Test public, team and private access in separate sessions. A non-owner cannot open a private
@@ -221,13 +229,15 @@ images/video; `fetch()` already defaults to CORS. See the compatibility details 
    - After a link is over one hour old, it fails for a new bucket request. Reloading the page
      while authorized obtains fresh links. A tab holding an expired URL may need a reload before
      a later seek/download. Test seeking after that reload.
-   - Confirm existing overview composer uploads still succeed. Check service health and gateway
-     logs; the automated deployment health check alone does not exercise direct delivery.
+   - Confirm existing overview composer uploads still succeed. Check the composer preview for
+     existing and newly dropped images/video, on public, team and private pages. Confirm Caddy access logs omit `Location` while the browser still receives it.
+     Check service health and gateway logs; the automated deployment health check alone does not exercise direct delivery.
 
 ### Access lifetime and rollback
 
-The accepted link lifetime is one hour, with reuse for 50 minutes. An issued URL is a bearer
-credential for that one file: it remains valid after logout, visibility changes, deletion, a
+The accepted link lifetime is one hour. Audio/video links are freshly signed on each gateway
+request so playback does not start with an aged grant. Other links may be reused for 50 minutes.
+An issued URL is a bearer credential for that one file: it remains valid after logout, visibility changes, deletion, a
 per-page mode change, or disabling direct delivery. Browser-cached/downloaded bytes cannot be
 revoked. New requests to original gateway URLs still check authorization and page state.
 

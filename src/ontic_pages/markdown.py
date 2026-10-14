@@ -81,7 +81,10 @@ def _image(self, tokens, idx, options, env):
     # External media keeps its existing request mode; its server may not support CORS.
     cors = (
         ' crossorigin="anonymous"'
-        if src and not SCHEME.match(src) and not src.startswith("//")
+        if env.get("media_cors", True)
+        and src
+        and not SCHEME.match(src)
+        and not src.startswith("//")
         else ""
     )
     if is_video(src):
@@ -112,9 +115,10 @@ def _parser() -> MarkdownIt:
 MD = _parser()
 
 
-def render(text: str, title: str = "") -> str:
+def render(text: str, title: str = "", *, media_cors: bool = True) -> str:
     """Markdown to an HTML fragment (the body of a page). When the text opens with a level-1
-    heading that is `title`, the page shows it already, so it is left out here."""
+    heading that is `title`, the page shows it already, so it is left out here.
+    Previews disable media_cors: their media is cross-origin and may require cookies."""
     text = text or ""
     if title:
         tokens = MD.parse(text)
@@ -123,7 +127,7 @@ def render(text: str, title: str = "") -> str:
             if _text(tokens[1]).strip() == title.strip():
                 lines = text.splitlines(keepends=True)
                 text = "".join(lines[: first.map[0]] + lines[first.map[1] :])
-    return MD.render(text)
+    return MD.render(text, env={"media_cors": media_cors})
 
 
 def _text(token) -> str:

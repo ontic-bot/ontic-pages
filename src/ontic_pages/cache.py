@@ -259,7 +259,8 @@ class DirectLinks:
 
     A URL is valid for LINK_SECONDS and handed out again until REUSE_SECONDS have passed, so the
     same file keeps the same URL for a while (the browser's cache works) and every URL handed out
-    has at least LINK_SECONDS - REUSE_SECONDS left. Least recently used out first past MAX_LINKS."""
+    has at least LINK_SECONDS - REUSE_SECONDS left. Media bypasses reuse via fresh=True.
+    Least recently used out first past MAX_LINKS."""
 
     LINK_SECONDS = 3600
     REUSE_SECONDS = 3000
@@ -270,8 +271,10 @@ class DirectLinks:
         self.lock = threading.Lock()
         self.links: OrderedDict[str, tuple[float, str]] = OrderedDict()
 
-    def url(self, key: str) -> tuple[str, int]:
+    def url(self, key: str, *, fresh: bool = False) -> tuple[str, int]:
         """(URL, seconds it stays valid at least) for the bucket key."""
+        if fresh:
+            return self.store.presign_get(key, self.LINK_SECONDS), self.LINK_SECONDS
         now = self.clock()
         with self.lock:
             hit = self.links.get(key)
