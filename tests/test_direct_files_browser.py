@@ -269,3 +269,20 @@ def test_composer_preview_existing_and_dropped_media(browser_site, store, visibi
     # The real composer previews new files from blob URLs and existing media via the
     # authenticated page host. Neither needs a bucket download or apex download CORS.
     assert bucket.requests == []
+
+
+def test_explicit_credentials_need_same_origin_mode_without_bucket_support(browser_site):
+    page, origin, _, _ = browser_site
+    page.goto(origin + "/?raw=1")
+    result = page.evaluate("""async () => {
+        let blocked = false;
+        try { await fetch('./data.json', {credentials:'include'}); }
+        catch (e) { blocked = e instanceof TypeError; }
+        const response = await fetch('./data.json', {
+            credentials:'include', mode:'same-origin'
+        });
+        return {blocked, redirected:response.redirected, data:await response.json()};
+    }""")
+    # The local bucket models the documented CORS rule without Allow-Credentials.
+    # This does not establish whether live B2 adds that header; verify during rollout.
+    assert result == {"blocked": True, "redirected": False, "data": {"version": 1}}

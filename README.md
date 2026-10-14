@@ -404,6 +404,9 @@ page.json and version ids stay in UTC.
   `image.crossOrigin = "anonymous"` before `src`). Normal `fetch()` already uses CORS mode.
   Resolve dependent files from the original page URL, not a redirected response's `url`.
   For data that requires the original origin, use `fetch(url, {mode: "same-origin"})`.
+  Explicit `credentials: "include"` or XHR `withCredentials` also requires the bucket to
+  support credentialed CORS after a redirect; live B2 behavior is not yet verified.
+  Use `mode: "same-origin"` when a fetch must retain credentials without relying on bucket CORS.
   A GLB using external resources must resolve them against its original gateway URL.
 
   Signed links last one hour. Audio/video requests get freshly signed links; other files

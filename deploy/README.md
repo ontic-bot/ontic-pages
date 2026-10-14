@@ -145,7 +145,8 @@ publisher action is required. Use the updated gateway for normal publishing; leg
 publishing with their own bucket key (`--direct`) must be upgraded to persist this setting.
 
 The gateway permits direct delivery by default (`ONTIC_PAGES_DIRECT_FILES=1`). Before deploying,
-configure bucket CORS. Both `check` and `install` probe live GET/HEAD preflights with Range,
+configure bucket CORS. Both `check` and `install` first validate the proposed `pages.caddy` with the installed Caddy,
+using a temporary wrapper with the required on-demand TLS permission. Both also probe live GET/HEAD preflights with Range,
 Content-Type and X-Requested-With before writing runtime configuration or restarting services. No admin
 credentials are needed for this probe. Deployment refuses to proceed when direct delivery is
 enabled but CORS is missing, incomplete or unreachable; explicit `0` permits server-only rollback.
@@ -205,7 +206,10 @@ images/video; `fetch()` already defaults to CORS. See the compatibility details 
    The box needs `python3` for the credential-free CORS probe. The gateway's existing `readFiles`
    key signs downloads; no additional runtime privilege,
    DNS record or OAuth change is required. The existing root deployment handles the environment
-   file, container rebuild and Caddy validation/reload. Verify the running image revision
+   file, container rebuild and Caddy validation/reload. The log filters explicitly use `wrap json`
+   for Caddy 2.6/2.7 compatibility. Install validates the combined configuration and reloads Caddy
+   before writing gateway settings or building the image, so a rejected Caddy configuration
+   cannot leave new direct-delivery code ready to restart behind the old logging configuration. Verify the running image revision
    (inspect the container image ID, then its `org.opencontainers.image.revision` label) and inspect
    only `ONTIC_PAGES_DIRECT_FILES` in `/etc/ontic-pages/gateway.env`, not other secret values.
    An absent value means enabled. The `check` subcommand also updates the remote checkout and
@@ -222,6 +226,10 @@ images/video; `fetch()` already defaults to CORS. See the compatibility details 
      Inspect `Origin` and `Access-Control-Allow-Origin` for the actual page subdomain.
      Test a jQuery-style JSON request with `X-Requested-With: XMLHttpRequest` and a fetch with
      `Content-Type: application/json`; both must pass the B2 preflight and load JSON.
+     Separately test explicit `credentials: "include"`/XHR `withCredentials` against live B2:
+     these require credentialed CORS response headers, which the local bucket does not model
+     and the preflight deployment probe does not guarantee. Use `mode: "same-origin"` for
+     fetches that must retain credentialed delivery through the gateway.
    - Nested modules, CSS images/fonts and workers load; CORS-enabled images work in canvas/WebGL.
      Publish another version with changed JSON/media and verify a populated browser cache sees it.
    - Test public, team and private access in separate sessions. A non-owner cannot open a private

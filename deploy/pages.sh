@@ -61,8 +61,27 @@ check_box() {
         || die "/etc/caddy/Caddyfile does not validate as it stands; fix that first"
     grep -Eq 'ask[[:space:]]+http://127\.0\.0\.1:8790/_tls-ask' /etc/caddy/Caddyfile \
         || die "/etc/caddy/Caddyfile has no global 'on_demand_tls { ask http://127.0.0.1:8790/_tls-ask }'; add it (deploy/README.md)"
-    echo "ok    podman, systemctl, caddy; Caddyfile imports conf.d, asks /_tls-ask and validates"
+    # Validate the proposed site with the installed Caddy, not just the existing config.
+    # In particular, unsupported log-filter syntax must fail before env/image changes.
+    check_proposed_caddy || die "proposed pages.caddy does not validate; runtime configuration and image unchanged"
+    echo "ok    podman, systemctl, caddy; existing Caddyfile and proposed pages.caddy validate"
 }
+
+# The site needs the same on-demand permission as the main Caddyfile. Keep the temporary
+# validation wrapper outside /etc so check does not modify installed configuration.
+check_proposed_caddy() (
+    candidate=$(mktemp)
+    trap 'rm -f "$candidate"' EXIT HUP INT TERM
+    cat > "$candidate" <<EOF
+{
+    on_demand_tls {
+        ask http://127.0.0.1:8790/_tls-ask
+    }
+}
+import "$HERE/pages.caddy"
+EOF
+    caddy validate --config "$candidate" --adapter caddyfile >/dev/null 2>&1
+)
 
 check_download_cors() {
     setting=$(val ONTIC_PAGES_DIRECT_FILES | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
@@ -92,11 +111,6 @@ do_install() {
     check_secrets
     check_box
     check_download_cors
-    write_etc
-    podman build -t "$IMAGE" --build-arg "REVISION=$(git -C "$CHECKOUT" rev-parse --short HEAD)" \
-        --ignorefile "$HERE/Dockerfile.dockerignore" -f "$HERE/Dockerfile" "$CHECKOUT"
-    for u in $UNITS; do install -m 0644 "$HERE/$u" "$QUADLET/$u"; done
-    systemctl daemon-reload
     backup=$(mktemp)
     [ -f "$SITE" ] && cp "$SITE" "$backup"
     install -m 0640 -o root -g caddy "$HERE/pages.caddy" "$SITE"
@@ -107,7 +121,12 @@ do_install() {
     fi
     rm -f "$backup"
     systemctl reload caddy
-    # Install log redaction before the new gateway can issue signed redirects.
+    # Install log redaction before changing runtime settings or the image used on restart.
+    write_etc
+    podman build -t "$IMAGE" --build-arg "REVISION=$(git -C "$CHECKOUT" rev-parse --short HEAD)" \
+        --ignorefile "$HERE/Dockerfile.dockerignore" -f "$HERE/Dockerfile" "$CHECKOUT"
+    for u in $UNITS; do install -m 0644 "$HERE/$u" "$QUADLET/$u"; done
+    systemctl daemon-reload
     systemctl restart pages-network.service pages-gateway.service pages-oauth2-proxy.service
     echo "ok    units started"
     echo "ok    caddy reloaded; https://pages.onticlabs.io/ should redirect to Google sign-in"

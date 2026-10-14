@@ -58,3 +58,17 @@ def test_redirect_location_is_sent_but_not_logged(tmp_path, site):
     assert access and access[-1]["status"] == 302
     assert "Location" not in access[-1]["resp_headers"]
     assert "secret-test-grant" not in output.read_text()
+
+
+def test_proposed_site_validates_with_required_global_permission(tmp_path):
+    source = Path(__file__).resolve().parents[1] / "deploy/pages.caddy"
+    config = tmp_path / "Caddyfile"
+    config.write_text(
+        f'{{\n on_demand_tls {{\n ask http://127.0.0.1:8790/_tls-ask\n }}\n}}\nimport "{source}"\n'
+    )
+    result = subprocess.run(
+        [CADDY, "validate", "--config", str(config), "--adapter", "caddyfile"],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr

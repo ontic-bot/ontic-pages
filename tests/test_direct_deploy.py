@@ -31,7 +31,15 @@ def test_install_propagates_enable_and_rollback(tmp_path):
         "chown": "exit 0",
         "podman": 'echo "podman $*" >> "$TEST_COMMANDS"',
         "systemctl": 'echo "systemctl $*" >> "$TEST_COMMANDS"',
-        "caddy": 'echo "caddy $*" >> "$TEST_COMMANDS"',
+        "caddy": """echo "caddy $*" >> "$TEST_COMMANDS"
+case "$3" in
+    *Caddyfile)
+        if [ "${TEST_REJECT_COMBINED:-0}" = 1 ]; then
+            if [ -f "$TEST_COMMANDS.validated" ]; then exit 1; fi
+            touch "$TEST_COMMANDS.validated"
+        fi ;;
+    *) exit "${TEST_PROPOSED_CADDY_STATUS:-0}" ;;
+esac""",
         "install": 'src=; dst=; for arg do src=$dst; dst=$arg; done; cp "$src" "$dst"',
     }
     for name, body in stubs.items():
@@ -81,8 +89,37 @@ def test_install_propagates_enable_and_rollback(tmp_path):
         assert result.returncode != 0
         assert "services were not changed" in result.stderr
         assert (etc / "ontic-pages/gateway.env").read_text() == "unchanged\n"
+    # Unsupported proposed Caddy syntax must fail before any persistent mutation, even
+    # when the existing Caddyfile validates and direct delivery is enabled.
+    before_caddy_failure = commands.read_text()
+    installed_site = (etc / "caddy/conf.d/pages.caddy").read_bytes()
+    for mode in ("check", "install"):
+        result = subprocess.run(
+            ["sh", str(script), mode],
+            env={**env, "TEST_PROPOSED_CADDY_STATUS": "1"},
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode != 0
+        assert "proposed pages.caddy does not validate" in result.stderr
+        assert (etc / "ontic-pages/gateway.env").read_text() == "unchanged\n"
+        assert (etc / "caddy/conf.d/pages.caddy").read_bytes() == installed_site
+    # A conflict discovered only in the combined installed config must also leave the
+    # gateway settings/image unchanged, and restore the previous site file.
+    result = subprocess.run(
+        ["sh", str(script), "install"],
+        env={**env, "TEST_REJECT_COMBINED": "1"},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert "restored the previous one" in result.stderr
+    assert (etc / "ontic-pages/gateway.env").read_text() == "unchanged\n"
+    assert (etc / "caddy/conf.d/pages.caddy").read_bytes() == installed_site
     log = commands.read_text()
-    assert log.count("cors-probe") == 4  # enabled, empty, and both rejected attempts
+    assert log.count("podman build") == before_caddy_failure.count("podman build")
+    assert log.count("systemctl") == before_caddy_failure.count("systemctl")
+    assert log.count("cors-probe") == 5  # enabled, empty, CORS rejections, combined rejection
     assert log.count("podman build") == before.count("podman build")
     assert log.count("podman build") == 3
     assert (
@@ -93,6 +130,7 @@ def test_install_propagates_enable_and_rollback(tmp_path):
         == 3
     )
     assert log.count("systemctl reload caddy") == 3
+    assert log.index("systemctl reload caddy") < log.index("podman build")
     assert log.index("systemctl reload caddy") < log.index("systemctl restart")
 
 
