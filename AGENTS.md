@@ -1,6 +1,6 @@
 # ontic-pages: agent notes
 
-Simple HTML hosting for the team: `ontic-pages login|publish|list|info|pull|share|set-current|url|comments|comment|resolve|gateway`.
+Simple HTML hosting for the team: `ontic-pages login|publish|list|info|pull|share|delivery|set-current|url|comments|comment|resolve|gateway`.
 The commands talk to the gateway with a token from `login`; `--direct` uses a bucket key instead.
 See README.md for what it does and deploy/README.md for how it is hosted.
 
@@ -80,6 +80,9 @@ See README.md for what it does and deploy/README.md for how it is hosted.
   `helpers.upload_server` takes its presigned PUTs and answers its GETs). `test_js.py` runs
   bridge.js and bar.js in node, `test_comments_js.py` pins.js and comments.js, and
   `test_edit_js.py` the served edit mode, `test_details_js.py` the Details panel, each with a small fake DOM (all skipped without node).
+- `tests/test_direct_files_browser.py`: optional Chromium/Playwright regression suite, run with
+  `uv run --with playwright --with nodejs-wheel pytest -q`; CHROMIUM_PATH selects the browser.
+  `direct_bucket.py` models private grants, expiry, Range and CORS without production credentials.
 - `deploy/`: container image, Quadlet units, Caddy and oauth2-proxy config, deploy scripts.
 
 ## Rules
@@ -93,8 +96,12 @@ See README.md for what it does and deploy/README.md for how it is hosted.
 - Keep it small. Provenance is metadata in `page.json`, never checked.
 - The tool never deletes anything from the bucket. Deleting a page sets `deleted` in its
   `labels.json`: hidden everywhere, 404 at its address, restorable.
-- File bytes never pass through the gateway (Caddy caps bodies at 64 KB on purpose): they go to
-  presigned URLs. With direct files on, the same holds for reading a page's files, HTML aside. Only the gateway holds a bucket key in normal use.
+- Uploaded file bytes go to presigned URLs (Caddy caps request bodies at 64 KB). Download
+  delivery is per page in labels.json: missing means server; only new names default to direct.
+  Preserve it across publishes, edits and version switches. Direct mode redirects eligible
+  CORS GETs for data/media; dependencies, HEAD and no-cors/same-origin browser requests remain
+  on the gateway. Redirects are private, no-store. ONTIC_PAGES_DIRECT_FILES=0 is global rollback;
+  omitted/empty defaults to enabled. Only the gateway holds a bucket key in normal use.
 - Add or update a test for every behavior change; when you use a new boto3 call, add it to the fake.
 - Never commit `deploy/secrets.env` or any credential.
 - Never use em dashes in any text.

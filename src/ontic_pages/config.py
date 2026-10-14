@@ -12,9 +12,9 @@ Read from ~/.config/ontic-pages/config.toml, then overridden by environment vari
                                              served from <name>.<content_suffix>)
     email             ONTIC_PAGES_EMAIL      (who you are; default: git user.email, else $USER)
     direct            ONTIC_PAGES_DIRECT     (1: use your own bucket key, not the gateway)
-    direct_files      ONTIC_PAGES_DIRECT_FILES  (the gateway only, 1: answer a page's files other
-                                             than HTML with a redirect to a presigned bucket URL,
-                                             so their bytes go from the bucket to the browser)
+    direct_files      ONTIC_PAGES_DIRECT_FILES  (gateway only; default 1: eligible data/media on
+                                             direct pages go to presigned bucket URLs; 0 forces
+                                             server delivery without changing page settings)
     access_key_id     AWS_ACCESS_KEY_ID
     secret_access_key AWS_SECRET_ACCESS_KEY
     token_secret      ONTIC_PAGES_TOKEN_SECRET  (the gateway only: signs the command line's tokens)
@@ -71,7 +71,7 @@ class Config:
     content_suffix: str = ""
     email: str | None = None
     direct: str = ""
-    direct_files: str = ""
+    direct_files: str = "1"
     access_key_id: str | None = None
     secret_access_key: str | None = None
     token_secret: str = ""

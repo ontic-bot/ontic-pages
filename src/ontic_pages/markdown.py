@@ -77,14 +77,21 @@ def _image(self, tokens, idx, options, env):
     token = tokens[idx]
     src = token.attrGet("src") or ""
     alt = self.renderInlineAsText(token.children or [], options, env)
+    # Local media can follow the gateway's direct-delivery redirects without tainting canvas.
+    # External media keeps its existing request mode; its server may not support CORS.
+    cors = (
+        ' crossorigin="anonymous"'
+        if src and not SCHEME.match(src) and not src.startswith("//")
+        else ""
+    )
     if is_video(src):
         return (
-            f'<video controls preload="metadata" playsinline src="{escape(src)}">'
+            f'<video controls preload="metadata" playsinline src="{escape(src)}"{cors}>'
             f'<a href="{escape(src)}">{escape(alt or src)}</a></video>'
         )
     title = token.attrGet("title")
     extra = f' title="{escape(title)}"' if title else ""
-    return f'<img src="{escape(src)}" alt="{escape(alt)}" loading="lazy"{extra}>'
+    return f'<img src="{escape(src)}" alt="{escape(alt)}" loading="lazy"{extra}{cors}>'
 
 
 def _parser() -> MarkdownIt:

@@ -153,6 +153,14 @@ def page_lines(pages: list[dict], args) -> list[str]:
     return lines
 
 
+def cmd_delivery(args) -> None:
+    """A page setting, changed by its owner through the gateway."""
+    check_name(args.name)
+    api, _ = open_api()
+    api.post(remote.page_path(args.name, "delivery"), {"delivery": args.delivery})
+    print(f"{args.name}: {args.delivery} delivery")
+
+
 def cmd_list(args) -> None:
     if not direct(args):
         return list_remote(args)
@@ -418,6 +426,11 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("name")
     s.add_argument("visibility", choices=VISIBILITIES, help=LEVELS)
     s.set_defaults(func=cmd_share)
+
+    s = sub.add_parser("delivery", help="choose server or direct file delivery for a page you own")
+    s.add_argument("name")
+    s.add_argument("delivery", choices=("server", "direct"))
+    s.set_defaults(func=cmd_delivery)
 
     s = sub.add_parser(
         "list", parents=[key], help="list pages with their visibility, or the versions of one"

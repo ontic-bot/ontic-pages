@@ -267,9 +267,17 @@ def finish(store: Store, page: dict, visibility: str | None) -> str:
     the visibility (only when given; a later publish without it keeps the level), then flip
     `current`. Returns page.json's ETag (may be empty)."""
     name, version = page["name"], page["version"]
+    # Delivery belongs to the page, not a version. Missing on an existing page means server;
+    # only the first successful publication of a new name defaults to direct delivery.
+    old_labels = store.labels(name)
+    delivery = old_labels.get("delivery")
+    if delivery is None:
+        delivery = "server" if store.current(name) else "direct"
+    if delivery not in ("server", "direct"):
+        delivery = "server"
     etag = store.put(store.key(name, version, META_FILE), page_json(page))
     # The labels start again from this version (and a deleted page is back).
-    store.set_labels(name, {k: page.get(k) for k in LABEL_KEYS})
+    store.set_labels(name, {**{k: page.get(k) for k in LABEL_KEYS}, "delivery": delivery})
     if visibility is not None:
         store.set_visibility(name, visibility)
     store.set_current(name, version)

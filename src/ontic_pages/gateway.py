@@ -16,6 +16,7 @@ On the apex (the host of ONTIC_PAGES_URL, pages.onticlabs.io):
     GET  /_api/pages                    the pages this viewer may open (signed in)
     GET  /_api/me                       who is asking
     POST /_api/pages/<name>/visibility  {"visibility": ...}, by the owner only
+    POST /_api/pages/<name>/delivery    {"delivery": "server"|"direct"}, owner recovery override
     POST /_api/pages/<name>/current     {"version": ...}, by the owner only
     POST /_api/pages/<name>/versions    publish: start (uploads.py); then .../<version>/files for
                                         more of the file list, and .../<version>/commit
@@ -43,9 +44,9 @@ On a page's own host, <name>.<content suffix> (the content host):
 
     GET  /<path>                        the current version's file, index.html for folders
     GET  /_v/<version>/<path>           a given version's file
-                                        With direct files on (ONTIC_PAGES_DIRECT_FILES), a file
-                                        other than HTML is a 302 to a presigned bucket URL after
-                                        the same access check: its bytes skip the gateway.
+                                        Direct pages redirect eligible CORS data/media GETs to
+                                        the bucket after access checks. Legacy pages and browser
+                                        compatibility fallbacks stay on the gateway.
     GET  /_bridge.<hash>.js             the bridge, added to HTML shown in the shell's frame
 
     A browser opening a content URL as a page of its own (Sec-Fetch-Dest: document) is sent to
@@ -136,7 +137,7 @@ API_FILES = re.compile(r"^/_api/pages/([^/]+)/files$")
 API_VERSION = re.compile(r"^/_api/pages/([^/]+)/versions/(\d{8}T\d{6}Z)$")
 API_WRITE = re.compile(
     r"^/_api/pages/([^/]+)/"
-    r"(visibility|current|edits|labels|delete|versions|versions/(\d{8}T\d{6}Z)/(files|commit))$"
+    r"(visibility|delivery|current|edits|labels|delete|versions|versions/(\d{8}T\d{6}Z)/(files|commit))$"
 )
 API_SOURCE = re.compile(r"^/_api/pages/([^/]+)/source$")
 RESEARCH_WRITE = re.compile(
@@ -216,7 +217,7 @@ class Gateway:
         cache_bytes: int = 256 * MB,
         file_bytes: int = 4 * MB,
         token_secret: str = "",
-        direct_files: bool = False,
+        direct_files: bool = True,
     ):
         self.store, self.site, self.identity = store, site, identity
         self.files = FileCache(store, cache_bytes, file_bytes)
@@ -329,6 +330,7 @@ class Gateway:
         return {
             "name": name,
             "visibility": visibility,
+            "delivery": "direct" if self.labels.get(name).get("delivery") == "direct" else "server",
             "current": current,
             "published_by": owner if email else "",
             "role": "owner" if email and email.lower() == owner.strip().lower() else "viewer",
@@ -425,6 +427,46 @@ def listing_html(gw: Gateway, email: str, query: str = "") -> str:
 
 def bad_path(rest: str) -> bool:
     return any(p in (".", "..") or "\\" in p for p in rest.split("/"))
+
+
+def direct_file_request(method: str, headers, ctype: str) -> bool:
+    """Only GETs for data/media whose request permits crossing origins.
+
+    Scripts, stylesheets, playlists, SVG/XML and glTF JSON can resolve relative URLs;
+    redirecting them loses the gateway origin and signatures. Workers require the same origin.
+    A no-cors image/video can display but taints canvas, so keep it on the gateway as well.
+    Non-browser clients without Fetch Metadata may follow redirects for the same eligible types.
+    """
+    ctype = ctype.split(";", 1)[0]
+    eligible = ctype.startswith("font/") or ctype in {
+        "audio/mpeg",
+        "audio/ogg",
+        "audio/wav",
+        "audio/x-wav",
+        "audio/flac",
+        "audio/mp4",
+        "audio/webm",
+        "video/mp4",
+        "video/webm",
+        "video/ogg",
+        "video/quicktime",
+        "video/mpeg",
+        "image/png",
+        "image/jpeg",
+        "image/gif",
+        "image/webp",
+        "image/avif",
+        "application/json",
+        "application/octet-stream",
+        "application/wasm",
+        "model/gltf-binary",
+    }
+    return (
+        method == "GET"
+        and eligible
+        and headers.get("Sec-Fetch-Mode", "cors") == "cors"
+        and headers.get("Sec-Fetch-Dest", "") in ("", "empty", "image", "audio", "video", "font")
+    )
 
 
 def etag_matches(header: str | None, etag: str) -> bool:
@@ -926,6 +968,10 @@ def make_handler(gw: Gateway):
                     if level not in VISIBILITIES:
                         error = "visibility: private, ontic or public"
                         return self.send_json(400, {"error": error})
+                elif m.group(2) == "delivery":
+                    delivery = data.get("delivery")
+                    if delivery not in ("server", "direct"):
+                        return self.send_json(400, {"error": "delivery: server or direct"})
                 else:
                     version = data.get("version")
                     if (
@@ -938,6 +984,10 @@ def make_handler(gw: Gateway):
                     return self.send_json(403, {"error": "only the owner can change this"})
                 if m.group(2) == "visibility":
                     gw.store.set_visibility(name, level)
+                elif m.group(2) == "delivery":
+                    labels = {**gw.labels.get(name), "delivery": delivery}
+                    gw.store.set_labels(name, labels)
+                    gw.labels.put(name, labels)
                 else:
                     gw.store.set_current(name, version)
                 gw.pages.forget(name)
@@ -1147,6 +1197,7 @@ def make_handler(gw: Gateway):
                 raise Refused(429, "too many changes, wait a minute")
             page, _ = gw.uploads.commit(name, version, email)
             gw.pages.forget(name)
+            gw.labels.forget(name)
             self.log_message("publish commit %s %s", name, version)
             self.send_json(200, {
                 "page": page, "visibility": gw.store.visibility(name),
@@ -1169,6 +1220,7 @@ def make_handler(gw: Gateway):
                 raise Refused(429, "too many changes, wait a minute")
             phases.lap("lookup")
             page = save_edits(gw.store, name, email, data, gw.uploads, gw.files, gw.pages, phases)
+            gw.labels.forget(name)
             facts = gw.facts(name, email)
             phases.lap("answer")
             edited = page["meta"]["edited_from"]
@@ -1214,18 +1266,22 @@ def make_handler(gw: Gateway):
                 "Cache-Control": cache,
                 "X-Content-Type-Options": "nosniff",
                 "Content-Security-Policy": f"frame-ancestors 'self' {site.origin}",
+                "Vary": "Sec-Fetch-Dest, Sec-Fetch-Mode",
             }
             key = gw.store.key(name, version, rest)
-            if gw.direct and not headers["Content-Type"].startswith("text/html"):
-                # Direct files: the browser fetches the bytes from the bucket (Range included).
-                # HTML stays here (the bar's bridge, the frame policy). The version's file list
-                # says whether the file exists; anything else falls through to the 404 below.
+            if (
+                gw.direct
+                and gw.labels.get(name).get("delivery") == "direct"
+                and direct_file_request(self.command, self.headers, headers["Content-Type"])
+            ):
+                # Recheck access and current on every gateway request. Only the bucket URL is
+                # reused: caching this redirect would pin unversioned paths to an old version.
                 if rest in gw.files.listing(name, version):
-                    url, left = gw.direct.url(key)
+                    url, _ = gw.direct.url(key)
                     return self.send_body(
                         302,
                         b"",
-                        {"Location": url, "Cache-Control": f"private, max-age={max(0, left - 60)}"},
+                        {"Location": url, "Cache-Control": "private, no-store"},
                     )
             if self.headers.get("Range"):
                 try:
@@ -1311,13 +1367,13 @@ def make_server(
     token_secret: str = "",
     github: GitHub | None = None,
     github_owner: str = "",
-    direct_files: bool = False,
+    direct_files: bool = True,
 ) -> ThreadingHTTPServer:
     """identity: who sent a Cookie header; default: --local-as, else oauth2-proxy at auth_url.
     token_secret: signs the command line's tokens; without it their routes answer 503.
     github: the repository whose milestones are kept in step with these (github.py), in a
     thread started here; github_owner owns the ones made there.
-    direct_files: answer files other than HTML with a redirect to a presigned bucket URL."""
+    direct_files: globally allow eligible redirects for direct pages (default on)."""
     if identity is None:
         identity = fixed(local_email) if local_email else OAuth2Proxy(auth_url, ttl=ttl)
     gw = Gateway(

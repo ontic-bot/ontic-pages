@@ -387,12 +387,49 @@ page.json and version ids stay in UTC.
   for video, ETags and 304s), `/_v/<version>/<path>` a given version, cached for a
   year. Opened directly in a browser it redirects to the bar; `?raw=1` opens it
   without the bar.
-  With direct files on (`ONTIC_PAGES_DIRECT_FILES=1` on the gateway), every file but HTML
-  is answered with a 302 to a presigned bucket URL after the same access check, so its bytes go
-  from the bucket to the browser and never through the gateway; HTML stays on the gateway (the
-  bar's bridge and the frame policy). The URL for a file is the same for 50 minutes (valid for an
-  hour), so the browser's cache works. It needs the bucket's CORS rule for the page hosts
-  (`deploy/README.md`, "Direct files").
+  Direct delivery is enabled by default for **newly created pages**. Existing pages keep
+  server delivery, including after publishing another version, editing, switching versions or
+  restoring a deleted page. This is automatic: publishing does not require a delivery option.
+  The page setting is kept in `labels.json`; a missing setting means server delivery.
+
+  On a direct page, eligible GET requests receive a presigned bucket URL after the access check.
+  Raster images, audio/video, fonts, JSON, binary data, WASM and GLB can use this path. HTML,
+  CSS, JavaScript, workers, playlists, SVG/XML, glTF JSON and HEAD requests stay on the gateway. Browser
+  requests must use CORS mode; ordinary images/video without `crossorigin` and requests with
+  `mode: "same-origin"` keep using the gateway. Non-browser GET clients may follow redirects.
+  This keeps dependent URLs and canvas access working while offloading compatible data/media.
+
+  Markdown-generated pages set anonymous CORS on local media automatically.
+  When writing a new HTML page, use `crossorigin="anonymous"` on images and video (or set
+  `image.crossOrigin = "anonymous"` before `src`). Normal `fetch()` already uses CORS mode.
+  Resolve dependent files from the original page URL, not a redirected response's `url`.
+  For data that requires the original origin, use `fetch(url, {mode: "same-origin"})`.
+  A GLB using external resources must resolve them against its original gateway URL.
+
+  Signed links last one hour and are reused for up to 50 minutes. Gateway redirects are
+  `private, no-store`, so a fresh file request checks access and the current version again.
+  Reloading after expiry renews links for an authorized viewer. A tab holding an old bucket
+  URL can fail on a later seek/download; reload the page or request its original gateway URL.
+  Logout, deletion and permission changes do not revoke a link already issued.
+
+  Administrators must configure bucket CORS **before deploying** this default; see
+  `deploy/README.md`, "Direct delivery". `ONTIC_PAGES_DIRECT_FILES=0` globally forces server
+  delivery without changing page settings. As an optional owner recovery control,
+  `ontic-pages delivery <name> server|direct` persists a per-page override. Routine publishing
+  needs neither this command nor a migration of existing pages. Old clients using `--direct`
+  should be upgraded: they do not persist the new delivery setting.
+
+Browser regression tests (local private-bucket stand-in, no production credentials):
+
+```sh
+uv run --with playwright --with nodejs-wheel pytest -q
+```
+
+Install Chromium separately or set `CHROMIUM_PATH` to its executable. Without Playwright or
+Chromium the browser module skips; without Node the existing JavaScript tests skip. The browser
+suite covers legacy/new pages, CSS dependencies, modules, workers, canvas, HEAD, publish caching,
+expiry/reload, logout and video Range/seek. The bucket stand-in enforces path/method/expiry and
+CORS, but live B2 acceptance remains an admin deployment check.
 
 The bar: the home link, the title menu (who published, when, the description, the
 versions, Copy link, Open without the bar, Details, All pages), an "old version"

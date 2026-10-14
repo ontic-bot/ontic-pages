@@ -26,6 +26,8 @@ def cookie_identity(cookie: str) -> tuple[str, list[str]]:
 
 
 def start(store, **kwargs):
+    # General transport tests exercise server delivery; direct-file tests enable redirects.
+    kwargs.setdefault("direct_files", False)
     kwargs.setdefault("site", SITE)
     kwargs.setdefault("identity", cookie_identity)
     kwargs.setdefault("ttl", 0)
@@ -68,6 +70,7 @@ def start_local(store, **kwargs):
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
+    kwargs.setdefault("direct_files", False)
     kwargs.setdefault("site", Site(f"http://127.0.0.1:{port}", email_domain="onticlabs.io"))
     kwargs.setdefault("identity", cookie_identity)
     kwargs.setdefault("ttl", 0)

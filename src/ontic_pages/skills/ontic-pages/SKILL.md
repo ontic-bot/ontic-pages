@@ -1,6 +1,6 @@
 ---
 name: ontic-pages
-description: Make, publish and share an ontic page (a hosted HTML page for the team). Use whenever the user asks for an ontic page, a page to publish or share with the team, or a report, gallery, dashboard or viewer to host. Pages are published with `ontic pages publish`, never to claude.ai. Also for the team's research milestones: listing, adding, closing them, and linking reports to them.
+description: "Make, publish and share an ontic page (a hosted HTML page for the team). Use whenever the user asks for an ontic page, a page to publish or share with the team, or a report, gallery, dashboard or viewer to host. Pages are published with `ontic pages publish`, never to claude.ai. Also for the team's research milestones: listing, adding, closing them, and linking reports to them."
 ---
 
 # Ontic pages
@@ -46,8 +46,17 @@ Codex has neither; then follow these plain rules:
 Either way, these differ from a claude.ai artifact:
 
 - Write a complete HTML document (`<!doctype html>`, `<head>`, `<body>`); nothing wraps it.
-- Relative supporting files next to `index.html` (CSS, scripts, JSON, images, video) are fine,
-  because the whole folder is served from the page's own host.
+- Publish relative supporting files next to `index.html` (CSS, scripts, JSON, images, video).
+  New pages automatically use direct delivery for eligible data/media; existing pages retain
+  server delivery. No delivery-mode selection is needed when publishing.
+- On new pages, use `crossorigin="anonymous"` on images/audio/video; for dynamic images set
+  `image.crossOrigin = "anonymous"` before assigning `src`. This enables direct delivery while
+  preserving canvas/WebGL access. Normal `fetch()` already uses CORS mode. HTML, CSS, scripts,
+  workers and requests requiring the same origin remain on the gateway.
+- Resolve nested resources against the original page/resource URL, not `response.url` (which
+  may be a signed bucket URL). Use `fetch(url, {mode: "same-origin"})` when the loader needs the
+  original origin. Reloading the page renews one-hour links for authorized viewers; a long-idle
+  media player may need a reload before another seek. Do not save or share signed bucket URLs.
 - Links and sources must be relative (`assets/a.png`), never root-absolute (`/assets/a.png`).
 - Any CDN works. Pages are static: no server, no database. Data goes in the page or in
   relative JSON files.

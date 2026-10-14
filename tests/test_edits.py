@@ -291,24 +291,24 @@ def warm(files, pages, page):
         files.get("report", page["version"], path)
 
 
-def test_save_reads_only_current_when_cached(store, s3, page):
+def test_save_reads_current_and_delivery_when_cached(store, s3, page):
     files, pages = caches(store)
     warm(files, pages, page)
     s3.calls.clear()
     edit = body(page, change("Results", "Findings"))
     new = save(store, "report", OWNER, edit, None, files, pages)
     # The new version id (a HEAD), the old version's file list (once), the files written at
-    # once, `current` asked again, then page.json, labels.json and `current` written.
+    # once, current and page delivery read, then page.json, labels.json and current written.
     assert sorted(s3.calls) == sorted(
         ["head_object", "list_objects_v2", "put_object"] + ["copy_object"] * 5
-        + ["get_object", "put_object", "put_object", "put_object"]
+        + ["get_object", "get_object", "put_object", "put_object", "put_object"]
     )  # fmt: skip
     assert s3.calls[-4:] == ["get_object", "put_object", "put_object", "put_object"]
-    # The next save reads nothing but `current`: the new version is in the caches already.
+    # The next save reads current and delivery; the version files are already cached.
     s3.calls.clear()
     edit = body(new, change("Findings", "Results"))
     again = save(store, "report", OWNER, edit, None, files, pages)
-    assert s3.calls.count("get_object") == 1 and "list_objects_v2" not in s3.calls
+    assert s3.calls.count("get_object") == 2 and "list_objects_v2" not in s3.calls
     assert again["meta"]["edited_from"] == new["version"]
     # The page's state as written: no reads for it either.
     s3.calls.clear()

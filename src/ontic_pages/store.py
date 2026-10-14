@@ -5,7 +5,8 @@ at the bucket root):
     <prefix><name>/visibility                private, ontic or public (absent means ontic)
     <prefix><name>/comments.json             the comments, written by the gateway (comments.py)
     <prefix><name>/labels.json               pillar, tags, milestone, title as changed in the
-                                             overview, and deleted (hidden; nothing is removed)
+                                             overview, delivery mode, and deleted (hidden;
+                                             nothing is removed)
     <prefix><name>/<version>/page.json       metadata of that version
     <prefix><name>/<version>/<files...>      the page itself
 
